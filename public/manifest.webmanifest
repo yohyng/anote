@@ -1,7 +1,7 @@
 {
-  "name": "Pencil Room v3",
+  "name": "Pencil Room v4",
   "short_name": "Pencil Room",
-  "description": "Z Fold handwriting note app for slide-sized PNG export.",
+  "description": "Z Fold handwriting note app with per-tool settings, stroke eraser, and slide-sized PNG export.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

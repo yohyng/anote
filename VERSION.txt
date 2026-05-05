@@ -1,10 +1,12 @@
-Pencil Room v3.0.0
+Pencil Room v4.0.0
 
-Updates:
-- Visible app version
-- Eraser mode
-- Pen/Finger input mode switching
-- S Pen pressure floor/gain calibration
-- Clipboard image paste button
-- Smaller zoom/status badge
-- Reduced black-dot artifacts
+Drawing UX update:
+- Per-tool saved settings
+- Area eraser
+- Stroke eraser
+- Stroke model
+- Undo / Redo
+- Tool rail UI
+- S Pen pressure floor/gain
+- Clipboard image paste
+- Share PNG to OneDrive flow

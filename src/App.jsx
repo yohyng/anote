@@ -1,23 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v3
+ * Pencil Room / Galaxy Z Fold PWA v4
  * Self-contained React component. No external UI/icon libraries.
  *
- * Main flow:
- * - Write with S Pen or one finger
- * - Two-finger pinch zoom/pan for viewing the canvas
- * - Eraser mode
- * - Input mode switching: pen+finger / pen only / finger only
- * - S Pen pressure floor/gain calibration
- * - Clipboard image paste button
- * - Pinch gestures never draw accidental strokes
- * - Paste / drag-drop / file-select images into a slide-sized canvas
- * - Share PNG from Android share sheet and save it to OneDrive/PencilRoom/inbox
- * - Optional PWA Share Target: Samsung AI Select / Smart Select can share an image into this app
+ * v4 drawing UX:
+ * - Standard note-app-like tool rail
+ * - Per-tool saved settings
+ * - Eraser supports area erase and stroke erase
+ * - Stroke model for future editing
+ * - Undo / Redo
+ * - S Pen pressure floor / gain
+ * - Two-finger pinch zoom/pan does not draw accidental strokes
+ * - Paste / file / drag-drop image import
+ * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v3.0.0";
+const APP_VERSION = "v4.0.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -38,28 +37,39 @@ const SLIDE_PRESETS = {
   square: { label: "1:1", ratio: 1, exportWidth: 1400, exportHeight: 1400 },
 };
 
-const TOOL_PRESETS = {
+const DEFAULT_TOOL_CONFIGS = {
   silkyPen: {
+    id: "silkyPen",
+    kind: "ink",
+    icon: "✎",
     label: "Silky",
-    description: "なめらかで補正が効いたペン",
+    description: "なめらかで補正が効いた標準ペン",
     width: 3.2,
     opacity: 0.88,
-    smoothing: 0.56,
+    smoothing: 0.58,
     pressure: 0.55,
     velocity: 0.2,
     grain: 0,
+    density: 1,
   },
   pencil: {
+    id: "pencil",
+    kind: "pencil",
+    icon: "✐",
     label: "Graphite",
     description: "紙目に引っかかる鉛筆",
     width: 2.6,
-    opacity: 0.86,
+    opacity: 0.82,
     smoothing: 0.34,
-    pressure: 0.9,
-    velocity: 0.32,
-    grain: 0.64,
+    pressure: 0.85,
+    velocity: 0.28,
+    grain: 0.48,
+    density: 1.08,
   },
   technical: {
+    id: "technical",
+    kind: "ink",
+    icon: "─",
     label: "Clean",
     description: "均質な製図ペン",
     width: 2.2,
@@ -68,39 +78,65 @@ const TOOL_PRESETS = {
     pressure: 0.18,
     velocity: 0.05,
     grain: 0,
+    density: 1,
   },
   marker: {
+    id: "marker",
+    kind: "marker",
+    icon: "▰",
     label: "Marker",
-    description: "太く柔らかいマーカー",
+    description: "太く柔らかく乗るマーカー",
     width: 8,
-    opacity: 0.22,
+    opacity: 0.24,
     smoothing: 0.52,
     pressure: 0.45,
     velocity: 0.1,
     grain: 0,
+    density: 1,
   },
   eraser: {
+    id: "eraser",
+    kind: "eraser",
+    icon: "⌫",
     label: "Eraser",
-    description: "手書き線だけを消す消しゴム",
-    width: 14,
+    description: "手書き線を消す消しゴム",
+    width: 20,
     opacity: 1,
-    smoothing: 0.42,
-    pressure: 0.15,
+    smoothing: 0.44,
+    pressure: 0.1,
     velocity: 0,
     grain: 0,
+    density: 1,
+    eraserMode: "area", // area | stroke
+  },
+  image: {
+    id: "image",
+    kind: "image",
+    icon: "□",
+    label: "Image",
+    description: "貼り込んだ画像を移動・リサイズ",
+    width: 1,
+    opacity: 1,
+    smoothing: 0,
+    pressure: 0,
+    velocity: 0,
+    grain: 0,
+    density: 1,
   },
 };
 
+const TOOL_ORDER = ["silkyPen", "pencil", "technical", "marker", "eraser", "image"];
+
 const DENSITY_PRESETS = [
-  { id: "light", label: "うすめ", value: 0.7 },
+  { id: "light", label: "うすめ", value: 0.72 },
   { id: "natural", label: "標準", value: 1 },
-  { id: "dark", label: "濃い", value: 1.45 },
-  { id: "veryDark", label: "かなり濃い", value: 2.05 },
+  { id: "dark", label: "濃い", value: 1.42 },
+  { id: "veryDark", label: "かなり濃い", value: 1.95 },
 ];
 
 const INPUT_MODE_PRESETS = {
   penAndFinger: { label: "Pen + Finger", description: "S Pen と一本指の両方で描画" },
-  penOnly: { label: "Pen only", description: "S Penだけで描画。指はピンチズーム用" },
+  penOnly: { label: "Pen only", description: "S Penだけで描画。指はズーム・操作用" },
   fingerOnly: { label: "Finger only", description: "一本指だけで描画。S Penは無視" },
 };
 
@@ -123,6 +159,7 @@ function midpoint(a, b) {
     pressure: (a.pressure + b.pressure) / 2,
     tiltX: ((a.tiltX || 0) + (b.tiltX || 0)) / 2,
     tiltY: ((a.tiltY || 0) + (b.tiltY || 0)) / 2,
+    pointerType: b.pointerType || a.pointerType || "unknown",
     time: (a.time + b.time) / 2,
   };
 }
@@ -135,6 +172,7 @@ function quadraticPoint(start, control, end, t) {
     pressure: lerp(start.pressure, end.pressure, t),
     tiltX: lerp(start.tiltX || 0, end.tiltX || 0, t),
     tiltY: lerp(start.tiltY || 0, end.tiltY || 0, t),
+    pointerType: end.pointerType || start.pointerType || "unknown",
     time: lerp(start.time, end.time, t),
   };
 }
@@ -147,13 +185,46 @@ function nowId(prefix = "id") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function hashString(value) {
+  let hash = 2166136261;
+  const text = String(value);
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededRandom(seed) {
+  let value = seed >>> 0;
+  return function next() {
+    value += 0x6d2b79f5;
+    let t = value;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function makeEmptyPage(index = 1) {
   return {
     id: nowId("page"),
     name: `${DEFAULT_PAGE_NAME} ${String(index).padStart(2, "0")}`,
     createdAt: Date.now(),
-    drawingDataUrl: null,
+    strokes: [],
     images: [],
+  };
+}
+
+function clonePage(page) {
+  return {
+    ...page,
+    strokes: page.strokes.map((stroke) => ({
+      ...stroke,
+      points: stroke.points.map((point) => ({ ...point })),
+      settings: { ...stroke.settings },
+    })),
+    images: page.images.map((image) => ({ ...image })),
   };
 }
 
@@ -196,8 +267,8 @@ function drawPaperTexture(ctx, width, height, paperTooth, grainDots, paperPreset
 
 function normalizePointerPressure(event, calibration = {}) {
   const raw = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "pen" ? 0.08 : 0.48;
-  const floor = calibration.pressureFloor ?? 0.22;
-  const gain = calibration.pressureGain ?? 1.9;
+  const floor = calibration.pressureFloor ?? 0.24;
+  const gain = calibration.pressureGain ?? 2.2;
 
   if (event.pointerType === "pen") {
     return clamp(floor + raw * gain, 0.06, 1);
@@ -210,10 +281,6 @@ function getPointFromEvent(event, canvas, calibration = {}) {
   const rect = canvas.getBoundingClientRect();
   const pressure = normalizePointerPressure(event, calibration);
 
-  // The frame is visually transformed during pinch zoom.
-  // getBoundingClientRect() returns the transformed size.
-  // offsetWidth/offsetHeight keep the logical canvas size.
-  // This inverse conversion keeps pen coordinates aligned while zoomed.
   const logicalWidth = canvas.offsetWidth || rect.width || 1;
   const logicalHeight = canvas.offsetHeight || rect.height || 1;
   const scaleX = logicalWidth / Math.max(1, rect.width);
@@ -250,7 +317,7 @@ function speedBetween(a, b) {
   return distance(a, b) / dt;
 }
 
-function computeStrokeStyle(from, to, settings, tool) {
+function computeStrokeStyle(from, to, settings, kind) {
   const speed = clamp(speedBetween(from, to) / 1.8, 0, 1);
   const pressureValue = pressureCurve(to.pressure);
   const pressureWidth = 1 + settings.pressure * (pressureValue - 0.48);
@@ -259,34 +326,34 @@ function computeStrokeStyle(from, to, settings, tool) {
 
   const pressureAlpha = 0.68 + pressureValue * 0.42 * settings.pressure;
   const velocityAlpha = 1 - settings.velocity * speed * 0.28;
-  const toolBoost = tool === "pencil" ? 1.12 : tool === "technical" ? 1.05 : 1;
+  const toolBoost = kind === "pencil" ? 1.1 : kind === "ink" ? 1 : 1;
   const alpha = settings.opacity * settings.density * pressureAlpha * velocityAlpha * toolBoost;
 
   return { width, alpha, speed };
 }
 
-function shouldRenderGrain(tool, grain) {
-  if (tool === "technical") return false;
-  if (tool === "silkyPen") return grain >= 0.18;
-  if (tool === "marker") return grain >= 0.12;
+function shouldRenderGrain(kind, grain) {
+  if (kind === "technical" || kind === "eraser") return false;
+  if (kind === "ink") return grain >= 0.18;
+  if (kind === "marker") return grain >= 0.12;
   return grain > 0;
 }
 
-function computeGrainDotCount(curveLength, grain, tool) {
-  if (!shouldRenderGrain(tool, grain)) return 0;
-  const grainMultiplier = tool === "silkyPen" ? 0.035 : tool === "marker" ? 0.06 : 0.4;
+function computeGrainDotCount(curveLength, grain, kind) {
+  if (!shouldRenderGrain(kind, grain)) return 0;
+  const grainMultiplier = kind === "ink" ? 0.028 : kind === "marker" ? 0.04 : 0.28;
   return Math.floor(curveLength * grain * grainMultiplier);
 }
 
-function strokePath(ctx, start, control, end, style, tool, underpass = true) {
+function strokePath(ctx, start, control, end, style, kind) {
   ctx.save();
-  ctx.globalCompositeOperation = tool === "marker" ? "multiply" : "source-over";
+  ctx.globalCompositeOperation = kind === "marker" ? "multiply" : "source-over";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  if (underpass && (tool === "silkyPen" || tool === "marker")) {
-    ctx.strokeStyle = rgba(INK_COLOR, style.alpha * (tool === "marker" ? 0.16 : 0.06));
-    ctx.lineWidth = style.width * (tool === "marker" ? 1.8 : 1.32);
+  if (kind === "ink" || kind === "marker") {
+    ctx.strokeStyle = rgba(INK_COLOR, style.alpha * (kind === "marker" ? 0.16 : 0.055));
+    ctx.lineWidth = style.width * (kind === "marker" ? 1.8 : 1.28);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
@@ -302,96 +369,44 @@ function strokePath(ctx, start, control, end, style, tool, underpass = true) {
   ctx.restore();
 }
 
-function drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool) {
+function drawRoundCurveSegment(ctx, p0, p1, p2, settings, kind, seed = 1) {
   const start = midpoint(p0, p1);
   const end = midpoint(p1, p2);
-  const style = computeStrokeStyle(start, end, settings, tool);
+  const style = computeStrokeStyle(start, end, settings, kind);
 
-  strokePath(ctx, start, p1, end, style, tool, true);
+  strokePath(ctx, start, p1, end, style, kind);
 
   const curveLength = distance(start, end);
-  const dots = computeGrainDotCount(curveLength, settings.grain, tool);
+  const dots = computeGrainDotCount(curveLength, settings.grain, kind);
   if (dots <= 0) return;
 
+  const rng = seededRandom(seed);
   const tangentAngle = Math.atan2(end.y - start.y, end.x - start.x);
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
 
   for (let i = 0; i < dots; i += 1) {
-    const t = Math.random();
+    const t = rng();
     const point = quadraticPoint(start, p1, end, t);
-    const side = (Math.random() - 0.5) * style.width * 0.72;
+    const side = (rng() - 0.5) * style.width * 0.72;
     const px = point.x + Math.cos(tangentAngle + Math.PI / 2) * side;
     const py = point.y + Math.sin(tangentAngle + Math.PI / 2) * side;
-    const textureAlpha = tool === "silkyPen" ? 0.006 : tool === "marker" ? 0.012 : 0.05 + Math.random() * 0.06;
+    const textureAlpha = kind === "ink" ? 0.004 : kind === "marker" ? 0.009 : 0.028 + rng() * 0.05;
     ctx.fillStyle = rgba(INK_COLOR, style.alpha * textureAlpha);
     ctx.beginPath();
-    ctx.ellipse(px, py, Math.max(0.08, style.width * 0.055), Math.max(0.06, style.width * 0.04), tangentAngle, 0, Math.PI * 2);
+    ctx.ellipse(px, py, Math.max(0.06, style.width * 0.045), Math.max(0.05, style.width * 0.035), tangentAngle, 0, Math.PI * 2);
     ctx.fill();
   }
 
   ctx.restore();
 }
 
-function drawInitialCurveSegment(ctx, p0, p1, settings, tool) {
-  const end = midpoint(p0, p1);
-  if (tool === "eraser") {
-    drawEraserSegment(ctx, p0, end, settings);
-    return;
-  }
-  if (tool === "pencil") {
-    drawGraphiteSegment(ctx, p0, end, settings);
-    return;
-  }
-  const style = computeStrokeStyle(p0, end, settings, tool);
-  strokePath(ctx, p0, p0, end, style, tool, true);
-}
-
-function drawTailCurveSegment(ctx, p0, p1, settings, tool) {
-  const start = midpoint(p0, p1);
-  if (tool === "eraser") {
-    drawEraserSegment(ctx, start, p1, settings);
-    return;
-  }
-  if (tool === "pencil") {
-    drawGraphiteSegment(ctx, start, p1, settings);
-    return;
-  }
-  const style = computeStrokeStyle(start, p1, settings, tool);
-  strokePath(ctx, start, p1, p1, style, tool, true);
-}
-
-function drawTapDot(ctx, point, settings, tool) {
-  const fakeNext = { ...point, x: point.x + 0.01, y: point.y + 0.01, time: point.time + 1 };
-  const style = computeStrokeStyle(point, fakeNext, settings, tool);
-
-  if (tool === "eraser") {
-    ctx.save();
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.fillStyle = "rgba(0,0,0,1)";
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, Math.max(6, style.width * 0.5), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  const radius = tool === "marker" ? style.width * 0.34 : tool === "pencil" ? style.width * 0.13 : style.width * 0.18;
-
-  ctx.save();
-  ctx.globalCompositeOperation = tool === "marker" ? "multiply" : "source-over";
-  ctx.fillStyle = rgba(INK_COLOR, style.alpha * 0.55);
-  ctx.beginPath();
-  ctx.arc(point.x, point.y, Math.max(0.22, radius), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawGraphiteSegment(ctx, from, to, settings) {
+function drawGraphiteSegment(ctx, from, to, settings, seed = 1) {
   const style = computeStrokeStyle(from, to, settings, "pencil");
   const d = distance(from, to);
   const steps = Math.max(2, Math.ceil(d / 0.78));
   const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const rng = seededRandom(seed);
 
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
@@ -400,25 +415,25 @@ function drawGraphiteSegment(ctx, from, to, settings) {
     const t = i / steps;
     const x = lerp(from.x, to.x, t);
     const y = lerp(from.y, to.y, t);
-    if (Math.random() < settings.grain * 0.08) continue;
+    if (rng() < settings.grain * 0.06) continue;
 
-    const side = (Math.random() - 0.5) * style.width * (1 + settings.grain * 1.5);
-    const forward = (Math.random() - 0.5) * style.width * 0.25;
+    const side = (rng() - 0.5) * style.width * (0.8 + settings.grain * 1.2);
+    const forward = (rng() - 0.5) * style.width * 0.2;
     const px = x + Math.cos(angle + Math.PI / 2) * side + Math.cos(angle) * forward;
     const py = y + Math.sin(angle + Math.PI / 2) * side + Math.sin(angle) * forward;
-    const r = style.width * (0.18 + Math.random() * 0.24);
-    const alpha = clamp(style.alpha * (0.035 + Math.random() * 0.075), 0.006, 0.38);
+    const r = style.width * (0.16 + rng() * 0.22);
+    const alpha = clamp(style.alpha * (0.025 + rng() * 0.07), 0.004, 0.34);
 
     ctx.fillStyle = rgba(INK_COLOR, alpha);
     ctx.beginPath();
-    ctx.ellipse(px, py, r * 1.35, r * 0.74, angle, 0, Math.PI * 2);
+    ctx.ellipse(px, py, r * 1.28, r * 0.68, angle, 0, Math.PI * 2);
     ctx.fill();
   }
 
   ctx.restore();
 }
 
-function drawGraphiteCurveSegment(ctx, p0, p1, p2, settings) {
+function drawGraphiteCurveSegment(ctx, p0, p1, p2, settings, seed = 1) {
   const start = midpoint(p0, p1);
   const end = midpoint(p1, p2);
   const samples = Math.max(6, Math.ceil(distance(start, end) / 1.2));
@@ -427,7 +442,7 @@ function drawGraphiteCurveSegment(ctx, p0, p1, p2, settings) {
   for (let i = 1; i <= samples; i += 1) {
     const t = i / samples;
     const point = quadraticPoint(start, p1, end, t);
-    drawGraphiteSegment(ctx, previous, point, settings);
+    drawGraphiteSegment(ctx, previous, point, settings, seed + i * 97);
     previous = point;
   }
 }
@@ -465,6 +480,61 @@ function drawEraserSegment(ctx, from, to, settings) {
   ctx.restore();
 }
 
+function drawTapDot(ctx, point, settings, kind) {
+  const fakeNext = { ...point, x: point.x + 0.01, y: point.y + 0.01, time: point.time + 1 };
+  const style = computeStrokeStyle(point, fakeNext, settings, kind);
+
+  if (kind === "eraser") {
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, Math.max(6, style.width * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  const radius = kind === "marker" ? style.width * 0.32 : kind === "pencil" ? style.width * 0.1 : style.width * 0.16;
+  ctx.save();
+  ctx.globalCompositeOperation = kind === "marker" || kind === "pencil" ? "multiply" : "source-over";
+  ctx.fillStyle = rgba(INK_COLOR, style.alpha * 0.45);
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, Math.max(0.18, radius), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawStroke(ctx, stroke) {
+  if (!stroke || stroke.hidden || !Array.isArray(stroke.points) || stroke.points.length === 0) return;
+  const points = stroke.points;
+  const settings = stroke.settings || DEFAULT_TOOL_CONFIGS.silkyPen;
+  const kind = stroke.kind || settings.kind || "ink";
+  const seedBase = hashString(stroke.id || "stroke");
+
+  if (points.length === 1) {
+    drawTapDot(ctx, points[0], settings, kind);
+    return;
+  }
+
+  if (points.length === 2) {
+    if (kind === "eraser") drawEraserSegment(ctx, points[0], points[1], settings);
+    else if (kind === "pencil") drawGraphiteSegment(ctx, points[0], points[1], settings, seedBase);
+    else strokePath(ctx, points[0], points[0], points[1], computeStrokeStyle(points[0], points[1], settings, kind), kind);
+    return;
+  }
+
+  for (let i = 2; i < points.length; i += 1) {
+    const p0 = points[i - 2];
+    const p1 = points[i - 1];
+    const p2 = points[i];
+
+    if (kind === "eraser") drawEraserCurveSegment(ctx, p0, p1, p2, settings);
+    else if (kind === "pencil") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings, seedBase + i * 1031);
+    else drawRoundCurveSegment(ctx, p0, p1, p2, settings, kind, seedBase + i * 1031);
+  }
+}
+
 function drawImagesToCanvas(ctx, images, selectedImageId, showSelection = true) {
   for (const image of images) {
     if (!image.element) continue;
@@ -498,6 +568,34 @@ function getImageHit(images, x, y) {
     }
   }
   return null;
+}
+
+function pointToSegmentDistance(point, a, b) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const apx = point.x - a.x;
+  const apy = point.y - a.y;
+  const lengthSq = abx * abx + aby * aby;
+  if (lengthSq === 0) return distance(point, a);
+  const t = clamp((apx * abx + apy * aby) / lengthSq, 0, 1);
+  return Math.hypot(point.x - (a.x + abx * t), point.y - (a.y + aby * t));
+}
+
+function strokeHitTest(stroke, point, radius = 16) {
+  if (!stroke || stroke.hidden || stroke.kind === "eraser" || !Array.isArray(stroke.points)) return false;
+  const points = stroke.points;
+  const strokeRadius = Math.max(4, (stroke.settings?.width || 2) / 2);
+  const hitRadius = radius + strokeRadius;
+
+  if (points.length === 1) {
+    return distance(points[0], point) <= hitRadius;
+  }
+
+  for (let i = 1; i < points.length; i += 1) {
+    if (pointToSegmentDistance(point, points[i - 1], points[i]) <= hitRadius) return true;
+  }
+
+  return false;
 }
 
 function canvasToBlob(canvas, type = "image/png", quality) {
@@ -588,41 +686,40 @@ function ToolbarButton({ active, onClick, children, title, disabled, compact = f
   );
 }
 
-function FloatingButton({ active, onClick, children, title, disabled }) {
+function ToolRailButton({ active, tool, onClick }) {
   return (
     <button
       type="button"
-      title={title}
       onClick={onClick}
-      disabled={disabled}
+      title={tool.description}
       style={{
-        minWidth: 44,
-        height: 44,
-        borderRadius: 999,
+        width: 48,
+        height: 48,
+        borderRadius: 18,
         border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,.85)",
-        background: disabled ? "rgba(231,229,228,.75)" : active ? "#292524" : "rgba(255,255,255,.78)",
-        color: disabled ? "#a8a29e" : active ? "#fff" : "#292524",
+        background: active ? "#292524" : "rgba(255,255,255,.78)",
+        color: active ? "#fff" : "#292524",
         display: "grid",
         placeItems: "center",
-        boxShadow: "0 10px 28px rgba(28,25,23,.13)",
+        boxShadow: active ? "0 12px 28px rgba(28,25,23,.18)" : "0 10px 28px rgba(28,25,23,.08)",
         backdropFilter: "blur(18px)",
-        fontSize: 13,
-        cursor: disabled ? "not-allowed" : "pointer",
+        fontSize: 17,
+        cursor: "pointer",
       }}
     >
-      {children}
+      <span aria-hidden="true">{tool.icon}</span>
     </button>
   );
 }
 
-function RangeControl({ label, value, onChange, min, max, step, format }) {
+function RangeControl({ label, value, onChange, min, max, step, format, disabled }) {
   return (
-    <label style={{ display: "grid", gap: 8, fontSize: 12, color: "#57534e" }}>
+    <label style={{ display: "grid", gap: 8, fontSize: 12, color: disabled ? "#a8a29e" : "#57534e", opacity: disabled ? 0.7 : 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <span>{label}</span>
         <span style={{ color: "#78716c", fontVariantNumeric: "tabular-nums" }}>{format ? format(value) : Math.round(value * 100)}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
   );
 }
@@ -631,7 +728,7 @@ function SectionTitle({ children }) {
   return <div style={{ fontSize: 11, color: "#78716c", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
 }
 
-export default function PencilRoomZFoldPinchPWA() {
+export default function PencilRoomZFoldDrawingUXV4() {
   const frameRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const imageCanvasRef = useRef(null);
@@ -643,46 +740,41 @@ export default function PencilRoomZFoldPinchPWA() {
   const lastPointRef = useRef(null);
   const lastRawPointRef = useRef(null);
   const strokePointsRef = useRef([]);
+  const currentStrokeRef = useRef(null);
   const imageInteractionRef = useRef(null);
   const dragDepthRef = useRef(0);
   const activePointersRef = useRef(new Map());
   const activeDrawingPointerIdRef = useRef(null);
   const pinchGestureRef = useRef(null);
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
 
   const [pages, setPages] = useState([makeEmptyPage(1)]);
   const [currentPageId, setCurrentPageId] = useState(null);
   const [selectedImageId, setSelectedImageId] = useState(null);
-  const [tool, setTool] = useState("silkyPen");
-  const [mode, setMode] = useState("draw");
-  const [width, setWidth] = useState(TOOL_PRESETS.silkyPen.width);
-  const [opacity, setOpacity] = useState(TOOL_PRESETS.silkyPen.opacity);
-  const [smoothing, setSmoothing] = useState(TOOL_PRESETS.silkyPen.smoothing);
-  const [pressure, setPressure] = useState(TOOL_PRESETS.silkyPen.pressure);
-  const [velocity, setVelocity] = useState(TOOL_PRESETS.silkyPen.velocity);
-  const [grain, setGrain] = useState(TOOL_PRESETS.silkyPen.grain);
-  const [density, setDensity] = useState(1.0);
-  const [paperTooth, setPaperTooth] = useState(0.72);
+  const [activeToolId, setActiveToolId] = useState("silkyPen");
+  const [toolConfigs, setToolConfigs] = useState(() => JSON.parse(JSON.stringify(DEFAULT_TOOL_CONFIGS)));
   const [inputMode, setInputMode] = useState("penAndFinger");
   const [pressureFloor, setPressureFloor] = useState(0.24);
   const [pressureGain, setPressureGain] = useState(2.2);
+  const [paperTooth, setPaperTooth] = useState(0.72);
   const [paperPresetId, setPaperPresetId] = useState("warm");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
   const [showPages, setShowPages] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
-  const [status, setStatus] = useState("Z Fold向け：二本指ピンチで拡大縮小、ペン/一本指で描画できます。");
+  const [historyTick, setHistoryTick] = useState(0);
+  const [status, setStatus] = useState("v4：道具ごとに設定を保存。消しゴムはArea/Strokeを切り替えできます。");
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
   const slidePreset = SLIDE_PRESETS[slidePresetId];
   const paperPreset = PAPER_PRESETS[paperPresetId] || PAPER_PRESETS.warm;
+  const activeTool = toolConfigs[activeToolId] || toolConfigs.silkyPen;
   const pageIndex = Math.max(0, pages.findIndex((p) => p.id === currentPage.id));
   const darkPaper = paperPresetId === "charcoal";
-
-  const settings = useMemo(
-    () => ({ width, opacity, smoothing, pressure, velocity, grain, density }),
-    [width, opacity, smoothing, pressure, velocity, grain, density]
-  );
+  const canUndo = undoStackRef.current.length > 0;
+  const canRedo = redoStackRef.current.length > 0;
 
   const pressureCalibration = useMemo(
     () => ({ pressureFloor, pressureGain }),
@@ -703,45 +795,68 @@ export default function PencilRoomZFoldPinchPWA() {
     return frameRef.current?.getBoundingClientRect() || { width: 1, height: 1 };
   }
 
-  function updateCurrentPage(patch) {
-    setPages((prev) => prev.map((page) => (page.id === currentPage.id ? { ...page, ...patch } : page)));
+  function updateCurrentPage(patchOrUpdater) {
+    setPages((prev) =>
+      prev.map((page) => {
+        if (page.id !== currentPage.id) return page;
+        const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(page) : patchOrUpdater;
+        return { ...page, ...patch };
+      })
+    );
   }
 
-  function saveDrawingToPage() {
-    const drawCanvas = drawCanvasRef.current;
-    if (!drawCanvas || !currentPage) return;
-    const dataUrl = drawCanvas.toDataURL("image/png");
-    setPages((prev) => prev.map((page) => (page.id === currentPage.id ? { ...page, drawingDataUrl: dataUrl } : page)));
+  function pushHistory() {
+    if (!currentPage) return;
+    undoStackRef.current.push(clonePage(currentPage));
+    if (undoStackRef.current.length > 40) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    setHistoryTick((v) => v + 1);
   }
 
-  function resetStrokeState() {
-    drawingRef.current = false;
-    hasMovedRef.current = false;
-    lastPointRef.current = null;
-    lastRawPointRef.current = null;
-    strokePointsRef.current = [];
-    activeDrawingPointerIdRef.current = null;
+  function undo() {
+    const previous = undoStackRef.current.pop();
+    if (!previous || !currentPage) return;
+    redoStackRef.current.push(clonePage(currentPage));
+    setPages((prev) => prev.map((page) => (page.id === currentPage.id ? previous : page)));
+    setSelectedImageId(null);
+    setHistoryTick((v) => v + 1);
+    requestAnimationFrame(() => renderPage(previous));
+    setStatus("Undoしました。");
   }
 
-  function redrawImages(images = currentPage.images, selectedId = selectedImageId) {
-    const canvas = imageCanvasRef.current;
-    const frame = frameRef.current;
-    if (!canvas || !frame) return;
-    const rect = frame.getBoundingClientRect();
-    const logicalWidth = frame.offsetWidth || rect.width;
-    const logicalHeight = frame.offsetHeight || rect.height;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
-    drawImagesToCanvas(ctx, images, selectedId, true);
+  function redo() {
+    const next = redoStackRef.current.pop();
+    if (!next || !currentPage) return;
+    undoStackRef.current.push(clonePage(currentPage));
+    setPages((prev) => prev.map((page) => (page.id === currentPage.id ? next : page)));
+    setSelectedImageId(null);
+    setHistoryTick((v) => v + 1);
+    requestAnimationFrame(() => renderPage(next));
+    setStatus("Redoしました。");
   }
 
-  function redrawPaper() {
-    const bgCanvas = bgCanvasRef.current;
-    const frame = frameRef.current;
-    if (!bgCanvas || !frame) return;
-    const width = frame.offsetWidth || frame.getBoundingClientRect().width;
-    const height = frame.offsetHeight || frame.getBoundingClientRect().height;
-    drawPaperTexture(bgCanvas.getContext("2d"), width, height, paperTooth, grainDotsRef.current, paperPreset);
+  function updateActiveToolConfig(key, value) {
+    if (activeToolId === "image") return;
+    setToolConfigs((prev) => ({
+      ...prev,
+      [activeToolId]: {
+        ...prev[activeToolId],
+        [key]: value,
+      },
+    }));
+  }
+
+  function selectTool(toolId) {
+    setActiveToolId(toolId);
+    setSelectedImageId(null);
+    const tool = toolConfigs[toolId] || DEFAULT_TOOL_CONFIGS[toolId];
+    if (tool?.kind === "image") {
+      setStatus("Imageモード：貼り込んだ画像を移動・リサイズできます。");
+    } else if (tool?.kind === "eraser") {
+      setStatus(`Eraser：${tool.eraserMode === "stroke" ? "ストローク単位で消します" : "触れた範囲を消します"}。`);
+    } else {
+      setStatus(`${tool?.label || "Tool"}：この道具の設定は個別に保存されます。`);
+    }
   }
 
   function setupCanvases(preserveDrawing = true) {
@@ -756,14 +871,6 @@ export default function PencilRoomZFoldPinchPWA() {
     const logicalHeight = frame.offsetHeight || rect.height;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
 
-    let previousDrawing = null;
-    if (preserveDrawing && drawCanvas.width > 0 && drawCanvas.height > 0) {
-      previousDrawing = document.createElement("canvas");
-      previousDrawing.width = drawCanvas.width;
-      previousDrawing.height = drawCanvas.height;
-      previousDrawing.getContext("2d").drawImage(drawCanvas, 0, 0);
-    }
-
     for (const canvas of [bgCanvas, imageCanvas, drawCanvas]) {
       canvas.width = Math.floor(logicalWidth * dpr);
       canvas.height = Math.floor(logicalHeight * dpr);
@@ -773,39 +880,45 @@ export default function PencilRoomZFoldPinchPWA() {
     }
 
     grainDotsRef.current = makePaperGrain(logicalWidth, logicalHeight);
-    drawPaperTexture(bgCanvas.getContext("2d"), logicalWidth, logicalHeight, paperTooth, grainDotsRef.current, paperPreset);
-    imageCanvas.getContext("2d").clearRect(0, 0, logicalWidth, logicalHeight);
-    drawCanvas.getContext("2d").clearRect(0, 0, logicalWidth, logicalHeight);
-
-    if (previousDrawing) {
-      drawCanvas.getContext("2d").drawImage(previousDrawing, 0, 0, logicalWidth, logicalHeight);
-    }
-
-    redrawImages();
+    renderPage(currentPage);
   }
 
-  function loadPageIntoCanvases(page) {
+  function redrawPaper() {
+    const bgCanvas = bgCanvasRef.current;
     const frame = frameRef.current;
-    const drawCanvas = drawCanvasRef.current;
-    const imageCanvas = imageCanvasRef.current;
-    if (!frame || !drawCanvas || !imageCanvas || !page) return;
+    if (!bgCanvas || !frame) return;
     const width = frame.offsetWidth || frame.getBoundingClientRect().width;
     const height = frame.offsetHeight || frame.getBoundingClientRect().height;
-    const drawCtx = drawCanvas.getContext("2d");
-    drawCtx.clearRect(0, 0, width, height);
+    drawPaperTexture(bgCanvas.getContext("2d"), width, height, paperTooth, grainDotsRef.current, paperPreset);
+  }
 
-    if (page.drawingDataUrl) {
-      const img = new Image();
-      img.onload = () => {
-        drawCtx.clearRect(0, 0, width, height);
-        drawCtx.drawImage(img, 0, 0, width, height);
-      };
-      img.src = page.drawingDataUrl;
-    }
+  function redrawImages(page = currentPage, selectedId = selectedImageId) {
+    const canvas = imageCanvasRef.current;
+    const frame = frameRef.current;
+    if (!canvas || !frame || !page) return;
+    const logicalWidth = frame.offsetWidth || frame.getBoundingClientRect().width;
+    const logicalHeight = frame.offsetHeight || frame.getBoundingClientRect().height;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
+    drawImagesToCanvas(ctx, page.images, selectedId, true);
+  }
 
-    const imageCtx = imageCanvas.getContext("2d");
-    imageCtx.clearRect(0, 0, width, height);
-    drawImagesToCanvas(imageCtx, page.images, selectedImageId, true);
+  function redrawStrokes(page = currentPage, liveStroke = null) {
+    const canvas = drawCanvasRef.current;
+    const frame = frameRef.current;
+    if (!canvas || !frame || !page) return;
+    const logicalWidth = frame.offsetWidth || frame.getBoundingClientRect().width;
+    const logicalHeight = frame.offsetHeight || frame.getBoundingClientRect().height;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
+    for (const stroke of page.strokes || []) drawStroke(ctx, stroke);
+    if (liveStroke) drawStroke(ctx, liveStroke);
+  }
+
+  function renderPage(page = currentPage) {
+    redrawPaper();
+    redrawImages(page, selectedImageId);
+    redrawStrokes(page);
   }
 
   useEffect(() => {
@@ -827,14 +940,19 @@ export default function PencilRoomZFoldPinchPWA() {
   }, [paperTooth, paperPresetId]);
 
   useEffect(() => {
-    if (currentPage) requestAnimationFrame(() => loadPageIntoCanvases(currentPage));
+    if (currentPage) requestAnimationFrame(() => renderPage(currentPage));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPageId]);
 
   useEffect(() => {
-    redrawImages();
+    redrawImages(currentPage, selectedImageId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedImageId, currentPage?.images]);
+
+  useEffect(() => {
+    redrawStrokes(currentPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage?.strokes]);
 
   useEffect(() => {
     function onPaste(event) {
@@ -880,26 +998,67 @@ export default function PencilRoomZFoldPinchPWA() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPageId]);
 
-  function applyToolPreset(nextTool) {
-    const preset = TOOL_PRESETS[nextTool];
-    setTool(nextTool);
-    setWidth(preset.width);
-    setOpacity(preset.opacity);
-    setSmoothing(preset.smoothing);
-    setPressure(preset.pressure);
-    setVelocity(preset.velocity);
-    setGrain(preset.grain);
-    setMode("draw");
-    setStatus(`${preset.label} に切り替えました`);
+  function beginStroke(point) {
+    const settings = JSON.parse(JSON.stringify(activeTool));
+    const stroke = {
+      id: nowId("stroke"),
+      toolId: activeToolId,
+      kind: activeTool.kind,
+      eraserMode: activeTool.eraserMode,
+      settings,
+      points: [point],
+      createdAt: Date.now(),
+      hidden: false,
+    };
+    currentStrokeRef.current = stroke;
+    strokePointsRef.current = [point];
   }
 
-  function drawCurveSegment(p0, p1, p2) {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (tool === "eraser") drawEraserCurveSegment(ctx, p0, p1, p2, settings);
-    else if (tool === "pencil") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings);
-    else drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool);
+  function addPointToLiveStroke(point) {
+    if (!currentStrokeRef.current) return;
+    currentStrokeRef.current.points.push(point);
+    strokePointsRef.current.push(point);
+    if (strokePointsRef.current.length > 80) {
+      strokePointsRef.current = strokePointsRef.current.slice(-80);
+    }
+    redrawStrokes(currentPage, currentStrokeRef.current);
+  }
+
+  function commitLiveStroke() {
+    const stroke = currentStrokeRef.current;
+    if (!stroke || stroke.points.length === 0) {
+      currentStrokeRef.current = null;
+      return;
+    }
+
+    const shouldCommit = stroke.points.length > 1 || !hasMovedRef.current;
+    if (shouldCommit) {
+      updateCurrentPage((page) => ({
+        strokes: [...(page.strokes || []), stroke],
+      }));
+    }
+    currentStrokeRef.current = null;
+  }
+
+  function eraseHitStrokes(point) {
+    const eraserRadius = Math.max(8, activeTool.width * 0.7);
+    const strokes = currentPage.strokes || [];
+    const hitIds = new Set();
+
+    for (let i = strokes.length - 1; i >= 0; i -= 1) {
+      const stroke = strokes[i];
+      if (strokeHitTest(stroke, point, eraserRadius)) {
+        hitIds.add(stroke.id);
+        break;
+      }
+    }
+
+    if (hitIds.size === 0) return false;
+
+    const nextStrokes = strokes.map((stroke) => (hitIds.has(stroke.id) ? { ...stroke, hidden: true } : stroke));
+    updateCurrentPage({ strokes: nextStrokes });
+    redrawStrokes({ ...currentPage, strokes: nextStrokes });
+    return true;
   }
 
   function handlePointerDown(event) {
@@ -922,18 +1081,14 @@ export default function PencilRoomZFoldPinchPWA() {
       return;
     }
 
-    if (mode === "draw" && !isPointerAllowedForDrawing(event.pointerType || "mouse", inputMode)) {
-      setStatus(`${INPUT_MODE_PRESETS[inputMode].label}：この入力では描画しません。二本指ピンチは使えます。`);
-      return;
-    }
-
     activeDrawingPointerIdRef.current = event.pointerId;
     canvas.setPointerCapture?.(event.pointerId);
     const raw = getPointFromEvent(event, canvas, pressureCalibration);
 
-    if (mode === "image") {
+    if (activeTool.kind === "image") {
       const hit = getImageHit(currentPage.images, raw.x, raw.y);
       if (hit) {
+        pushHistory();
         setSelectedImageId(hit.image.id);
         imageInteractionRef.current = {
           imageId: hit.image.id,
@@ -948,14 +1103,27 @@ export default function PencilRoomZFoldPinchPWA() {
       return;
     }
 
+    if (!isPointerAllowedForDrawing(event.pointerType || "mouse", inputMode)) {
+      activeDrawingPointerIdRef.current = null;
+      setStatus(`${INPUT_MODE_PRESETS[inputMode].label}：この入力では描画しません。二本指ピンチは使えます。`);
+      return;
+    }
+
+    pushHistory();
     drawingRef.current = true;
     hasMovedRef.current = false;
     setSelectedImageId(null);
 
-    const smooth = smoothPoint(null, raw, smoothing);
+    const smooth = smoothPoint(null, raw, activeTool.smoothing);
     lastRawPointRef.current = raw;
     lastPointRef.current = smooth;
-    strokePointsRef.current = [smooth];
+
+    if (activeTool.kind === "eraser" && activeTool.eraserMode === "stroke") {
+      eraseHitStrokes(smooth);
+      return;
+    }
+
+    beginStroke(smooth);
   }
 
   function handlePointerMove(event) {
@@ -986,7 +1154,7 @@ export default function PencilRoomZFoldPinchPWA() {
     if (activeDrawingPointerIdRef.current !== event.pointerId) return;
     const raw = getPointFromEvent(event, canvas, pressureCalibration);
 
-    if (mode === "image" && imageInteractionRef.current) {
+    if (activeTool.kind === "image" && imageInteractionRef.current) {
       const { imageId, mode: hitMode, startX, startY, original } = imageInteractionRef.current;
       const dx = raw.x - startX;
       const dy = raw.y - startY;
@@ -1000,7 +1168,7 @@ export default function PencilRoomZFoldPinchPWA() {
         return { ...image, x: original.x + dx, y: original.y + dy };
       });
       updateCurrentPage({ images: nextImages });
-      redrawImages(nextImages, selectedImageId);
+      redrawImages({ ...currentPage, images: nextImages }, selectedImageId);
       return;
     }
 
@@ -1010,7 +1178,7 @@ export default function PencilRoomZFoldPinchPWA() {
     for (const nativeEvent of nativeEvents) {
       const nextRaw = getPointFromEvent(nativeEvent, canvas, pressureCalibration);
       const rawSpeed = lastRawPointRef.current ? speedBetween(lastRawPointRef.current, nextRaw) : 0;
-      const dynamicSmoothing = clamp(smoothing - rawSpeed * 0.08, 0.03, 0.9);
+      const dynamicSmoothing = clamp(activeTool.smoothing - rawSpeed * 0.08, 0.03, 0.9);
       const smooth = smoothPoint(lastPointRef.current, nextRaw, dynamicSmoothing);
 
       if (distance(lastPointRef.current, smooth) < 0.08) {
@@ -1019,19 +1187,13 @@ export default function PencilRoomZFoldPinchPWA() {
       }
 
       hasMovedRef.current = true;
-      strokePointsRef.current.push(smooth);
-      const ctx = canvas.getContext("2d");
 
-      if (strokePointsRef.current.length === 2) {
-        drawInitialCurveSegment(ctx, strokePointsRef.current[0], strokePointsRef.current[1], settings, tool);
+      if (activeTool.kind === "eraser" && activeTool.eraserMode === "stroke") {
+        eraseHitStrokes(smooth);
+      } else {
+        addPointToLiveStroke(smooth);
       }
 
-      if (strokePointsRef.current.length >= 3) {
-        const len = strokePointsRef.current.length;
-        drawCurveSegment(strokePointsRef.current[len - 3], strokePointsRef.current[len - 2], strokePointsRef.current[len - 1]);
-      }
-
-      if (strokePointsRef.current.length > 6) strokePointsRef.current.shift();
       lastPointRef.current = smooth;
       lastRawPointRef.current = nextRaw;
     }
@@ -1062,29 +1224,41 @@ export default function PencilRoomZFoldPinchPWA() {
 
     if (!drawingRef.current) return;
 
-    const ctx = canvas.getContext("2d");
-    const points = strokePointsRef.current;
-
-    if (points.length === 1 && !hasMovedRef.current) {
-      drawTapDot(ctx, points[0], settings, tool);
-    } else if (points.length >= 2) {
-      drawTailCurveSegment(ctx, points[points.length - 2], points[points.length - 1], settings, tool);
+    if (activeTool.kind !== "eraser" || activeTool.eraserMode !== "stroke") {
+      if (!hasMovedRef.current && currentStrokeRef.current?.points?.length === 1) {
+        // Single tap still becomes a small dot/erase mark.
+        commitLiveStroke();
+      } else {
+        commitLiveStroke();
+      }
     }
 
     resetStrokeState();
-    saveDrawingToPage();
   }
 
   function handlePointerCancel(event) {
     event.preventDefault();
     activePointersRef.current.delete(event.pointerId);
     if (activePointersRef.current.size < 2) pinchGestureRef.current = null;
-    if (activeDrawingPointerIdRef.current === event.pointerId) resetStrokeState();
+    if (activeDrawingPointerIdRef.current === event.pointerId) {
+      resetStrokeState();
+      redrawStrokes(currentPage);
+    }
+  }
+
+  function resetStrokeState() {
+    drawingRef.current = false;
+    hasMovedRef.current = false;
+    lastPointRef.current = null;
+    lastRawPointRef.current = null;
+    strokePointsRef.current = [];
+    currentStrokeRef.current = null;
+    activeDrawingPointerIdRef.current = null;
   }
 
   function addPage() {
-    saveDrawingToPage();
     const page = makeEmptyPage(pages.length + 1);
+    pushHistory();
     setPages((prev) => [...prev, page]);
     setCurrentPageId(page.id);
     setSelectedImageId(null);
@@ -1094,13 +1268,13 @@ export default function PencilRoomZFoldPinchPWA() {
 
   function duplicatePage() {
     if (!currentPage) return;
-    saveDrawingToPage();
     const page = {
-      ...currentPage,
+      ...clonePage(currentPage),
       id: nowId("page"),
       name: `${currentPage.name} copy`,
       createdAt: Date.now(),
       images: currentPage.images.map((img) => ({ ...img, id: nowId("img") })),
+      strokes: currentPage.strokes.map((stroke) => ({ ...stroke, id: nowId("stroke") })),
     };
     setPages((prev) => [...prev, page]);
     setCurrentPageId(page.id);
@@ -1121,23 +1295,21 @@ export default function PencilRoomZFoldPinchPWA() {
   }
 
   function clearPage() {
-    const frame = frameRef.current;
-    const drawCanvas = drawCanvasRef.current;
-    if (!frame || !drawCanvas) return;
-    const width = frame.offsetWidth || frame.getBoundingClientRect().width;
-    const height = frame.offsetHeight || frame.getBoundingClientRect().height;
-    drawCanvas.getContext("2d").clearRect(0, 0, width, height);
-    updateCurrentPage({ drawingDataUrl: null, images: [] });
+    pushHistory();
+    updateCurrentPage({ strokes: [], images: [] });
     setSelectedImageId(null);
+    redrawImages({ ...currentPage, images: [] }, null);
+    redrawStrokes({ ...currentPage, strokes: [] });
     setStatus("現在のページをクリアしました。");
   }
 
   function deleteSelectedImage() {
     if (!selectedImageId || !currentPage) return;
+    pushHistory();
     const nextImages = currentPage.images.filter((image) => image.id !== selectedImageId);
     updateCurrentPage({ images: nextImages });
     setSelectedImageId(null);
-    redrawImages(nextImages, null);
+    redrawImages({ ...currentPage, images: nextImages }, null);
     setStatus("選択中の画像を削除しました。");
   }
 
@@ -1161,36 +1333,14 @@ export default function PencilRoomZFoldPinchPWA() {
       height,
       opacity: 1,
     };
+    pushHistory();
     const nextImages = [...currentPage.images, imageRecord];
     updateCurrentPage({ images: nextImages });
     setSelectedImageId(imageRecord.id);
-    setMode("image");
-    redrawImages(nextImages, imageRecord.id);
+    setActiveToolId("image");
+    redrawImages({ ...currentPage, images: nextImages }, imageRecord.id);
     const sourceLabel = source === "paste" || source === "pasteButton" ? "クリップボード" : source === "drop" ? "ドロップ" : source === "share-target" ? "共有" : "画像";
-    setStatus(`${sourceLabel}から画像を貼り込みました。Imageモードで移動・リサイズできます。`);
-  }
-
-
-  async function pasteImageFromClipboard() {
-    if (!navigator.clipboard?.read) {
-      setStatus("このブラウザではボタンからの画像貼り付けに未対応です。Ctrl+V / 長押し貼り付け / 共有を使ってください。");
-      return;
-    }
-
-    try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith("image/"));
-        if (!imageType) continue;
-        const blob = await item.getType(imageType);
-        const file = new File([blob], `clipboard-${Date.now()}.png`, { type: imageType });
-        handleImageFile(file, { source: "pasteButton" });
-        return;
-      }
-      setStatus("クリップボードに画像が見つかりませんでした。");
-    } catch (error) {
-      setStatus("クリップボード画像を読み取れませんでした。Androidでは権限やブラウザ制限で失敗することがあります。");
-    }
+    setStatus(`${sourceLabel}から画像を貼り込みました。Imageツールで移動・リサイズできます。`);
   }
 
   function handleImageFile(file, options = {}) {
@@ -1214,6 +1364,28 @@ export default function PencilRoomZFoldPinchPWA() {
       return;
     }
     files.slice(0, 4).forEach((file, index) => handleImageFile(file, { ...options, offsetIndex: index }));
+  }
+
+  async function pasteImageFromClipboard() {
+    if (!navigator.clipboard?.read) {
+      setStatus("このブラウザではボタンからの画像貼り付けに未対応です。Ctrl+V / 長押し貼り付け / 共有を使ってください。");
+      return;
+    }
+
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        const file = new File([blob], `clipboard-${Date.now()}.png`, { type: imageType });
+        handleImageFile(file, { source: "pasteButton" });
+        return;
+      }
+      setStatus("クリップボードに画像が見つかりませんでした。");
+    } catch {
+      setStatus("クリップボード画像を読み取れませんでした。Androidでは権限やブラウザ制限で失敗することがあります。");
+    }
   }
 
   function handleDragEnter(event) {
@@ -1285,7 +1457,6 @@ export default function PencilRoomZFoldPinchPWA() {
   }
 
   function downloadCurrentPage() {
-    saveDrawingToPage();
     const output = mergeCurrentPageToCanvas(false);
     if (!output) return;
     downloadCanvas(output, exportFilename());
@@ -1293,21 +1464,21 @@ export default function PencilRoomZFoldPinchPWA() {
   }
 
   async function shareCurrentPage() {
-    saveDrawingToPage();
     const output = mergeCurrentPageToCanvas(false);
     if (!output) return;
     await shareOrDownloadCanvas(output, exportFilename(), setStatus);
   }
 
   async function downloadAllPages() {
-    saveDrawingToPage();
     setStatus("全ページを書き出しています。ブラウザによって複数ダウンロード確認が出ます。");
     const originalPageId = currentPageId;
 
     for (let i = 0; i < pages.length; i += 1) {
       const page = pages[i];
       setCurrentPageId(page.id);
-      await new Promise((resolve) => setTimeout(resolve, 90));
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      renderPage(page);
+      await new Promise((resolve) => setTimeout(resolve, 120));
       const output = mergeCurrentPageToCanvas(false);
       if (output) downloadCanvas(output, exportFilename(page, i + 1));
       await new Promise((resolve) => setTimeout(resolve, 120));
@@ -1321,6 +1492,9 @@ export default function PencilRoomZFoldPinchPWA() {
     setViewport({ scale: 1, x: 0, y: 0 });
     setStatus("ズームを100%に戻しました。");
   }
+
+  const statusTextColor = darkPaper ? "rgba(255,255,255,.72)" : "#78716c";
+  const activeIsDrawingTool = activeTool.kind !== "image";
 
   return (
     <div
@@ -1353,14 +1527,16 @@ export default function PencilRoomZFoldPinchPWA() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>Pages</ToolbarButton>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Pencil Room <span style={{ fontSize: 10, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
+              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                Pencil Room <span style={{ fontSize: 10, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span>
+              </div>
               <div style={{ fontSize: 10, color: "#78716c" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
             </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", paddingBottom: 1 }}>
-            <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
-            <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>Undo</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>Redo</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>＋Img</ToolbarButton>
             <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>Paste</ToolbarButton>
             <ToolbarButton compact active={false} onClick={shareCurrentPage}>Share</ToolbarButton>
@@ -1405,7 +1581,7 @@ export default function PencilRoomZFoldPinchPWA() {
                 width: "100%",
                 height: "100%",
                 touchAction: "none",
-                cursor: mode === "image" ? "grab" : "crosshair",
+                cursor: activeTool.kind === "image" ? "grab" : activeTool.kind === "eraser" ? "cell" : "crosshair",
               }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
@@ -1425,31 +1601,36 @@ export default function PencilRoomZFoldPinchPWA() {
               style={{
                 pointerEvents: "none",
                 position: "absolute",
-                left: 12,
-                bottom: 10,
+                left: 10,
+                bottom: 9,
                 borderRadius: 999,
-                background: darkPaper ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.46)",
+                background: darkPaper ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.38)",
                 backdropFilter: "blur(6px)",
                 padding: "4px 7px",
                 fontSize: 9,
-                color: darkPaper ? "rgba(255,255,255,.72)" : "#78716c",
+                color: statusTextColor,
               }}
             >
-{TOOL_PRESETS[tool].label} · {mode} · {Math.round(viewport.scale * 100)}%
+              {activeTool.label} · {activeTool.kind === "eraser" ? activeTool.eraserMode : activeTool.kind} · {Math.round(viewport.scale * 100)}%
             </div>
           </div>
 
-          <div style={{ position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", display: "flex", gap: 8, padding: 6, borderRadius: 999, background: "rgba(249,246,238,.64)", border: "1px solid rgba(214,211,209,.72)", boxShadow: "0 14px 32px rgba(28,25,23,.13)", backdropFilter: "blur(18px)", zIndex: 14 }}>
-            <FloatingButton active={tool === "silkyPen" && mode === "draw"} onClick={() => applyToolPreset("silkyPen")}>Pen</FloatingButton>
-            <FloatingButton active={tool === "pencil" && mode === "draw"} onClick={() => applyToolPreset("pencil")}>Pcl</FloatingButton>
-            <FloatingButton active={tool === "eraser" && mode === "draw"} onClick={() => applyToolPreset("eraser")}>消</FloatingButton>
-            <FloatingButton active={false} onClick={addPage}>＋</FloatingButton>
-            <FloatingButton active={false} onClick={resetZoom}>100</FloatingButton>
-            <FloatingButton active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</FloatingButton>
+          <div style={{ position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", display: "flex", gap: 8, padding: 6, borderRadius: 26, background: "rgba(249,246,238,.64)", border: "1px solid rgba(214,211,209,.72)", boxShadow: "0 14px 32px rgba(28,25,23,.13)", backdropFilter: "blur(18px)", zIndex: 14 }}>
+            {TOOL_ORDER.map((toolId) => (
+              <ToolRailButton
+                key={toolId}
+                active={activeToolId === toolId}
+                tool={toolConfigs[toolId]}
+                onClick={() => selectTool(toolId)}
+              />
+            ))}
+            <div style={{ width: 1, background: "rgba(214,211,209,.8)", margin: "4px 0" }} />
+            <ToolRailButton active={false} tool={{ icon: "＋", description: "New page" }} onClick={addPage} />
+            <ToolRailButton active={false} tool={{ icon: "100", description: "Zoom reset" }} onClick={resetZoom} />
           </div>
 
           {status && (
-            <div style={{ position: "absolute", right: 12, bottom: 70, maxWidth: 380, borderRadius: 18, background: "rgba(255,255,255,.58)", border: "1px solid rgba(214,211,209,.7)", padding: "8px 10px", fontSize: 11, color: "#78716c", lineHeight: 1.4, backdropFilter: "blur(12px)", pointerEvents: "none" }}>
+            <div style={{ position: "absolute", right: 12, bottom: 74, maxWidth: 380, borderRadius: 18, background: "rgba(255,255,255,.58)", border: "1px solid rgba(214,211,209,.7)", padding: "8px 10px", fontSize: 11, color: "#78716c", lineHeight: 1.4, backdropFilter: "blur(12px)", pointerEvents: "none" }}>
               {status}
             </div>
           )}
@@ -1471,7 +1652,6 @@ export default function PencilRoomZFoldPinchPWA() {
                 key={page.id}
                 type="button"
                 onClick={() => {
-                  saveDrawingToPage();
                   setCurrentPageId(page.id);
                   setSelectedImageId(null);
                   setShowPages(false);
@@ -1490,7 +1670,7 @@ export default function PencilRoomZFoldPinchPWA() {
                 }}
               >
                 <span>{String(index + 1).padStart(2, "0")}</span>
-                <span style={{ opacity: 0.75 }}>{page.images.length} image{page.images.length === 1 ? "" : "s"}</span>
+                <span style={{ opacity: 0.75 }}>{page.strokes.length} stroke{page.strokes.length === 1 ? "" : "s"} · {page.images.length} image{page.images.length === 1 ? "" : "s"}</span>
               </button>
             ))}
           </aside>
@@ -1500,21 +1680,13 @@ export default function PencilRoomZFoldPinchPWA() {
       {showPanel && (
         <div style={{ position: "fixed", inset: 0, zIndex: 31, pointerEvents: "none" }}>
           <button type="button" onClick={() => setShowPanel(false)} style={{ position: "absolute", inset: 0, background: "rgba(28,25,23,.10)", border: 0, pointerEvents: "auto" }} />
-          <aside style={{ position: "absolute", right: 10, top: 64, bottom: 12, width: "min(360px, calc(100vw - 24px))", borderRadius: 28, border: "1px solid rgba(214,211,209,0.9)", background: "rgba(249,246,238,0.88)", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", backdropFilter: "blur(20px)", padding: 16, display: "grid", gap: 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
+          <aside style={{ position: "absolute", right: 10, top: 64, bottom: 12, width: "min(380px, calc(100vw - 24px))", borderRadius: 28, border: "1px solid rgba(214,211,209,0.9)", background: "rgba(249,246,238,0.9)", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", backdropFilter: "blur(20px)", padding: 16, display: "grid", gap: 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 650 }}>Settings <span style={{ fontSize: 11, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
-                <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>書き味・背景・出力・ズーム</div>
+                <div style={{ fontSize: 14, fontWeight: 650 }}>Tool Settings <span style={{ fontSize: 11, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>{activeTool.icon} {activeTool.label} / {activeTool.description}</div>
               </div>
               <ToolbarButton compact active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
-              <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
-              <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>画像追加</ToolbarButton>
-              <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>貼り付け</ToolbarButton>
-              <ToolbarButton compact active={false} onClick={deleteSelectedImage} disabled={!selectedImageId}>画像削除</ToolbarButton>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1525,25 +1697,59 @@ export default function PencilRoomZFoldPinchPWA() {
             </div>
 
             <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>Undo / Redo</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>Undo</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>Redo</ToolbarButton>
+              </div>
+              <div style={{ fontSize: 11, color: "#78716c" }}>history {historyTick} / strokes {currentPage?.strokes?.filter((s) => !s.hidden).length || 0}</div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>Input</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                {Object.entries(INPUT_MODE_PRESETS).map(([id, preset]) => (
+                  <ToolbarButton compact key={id} active={inputMode === id} onClick={() => setInputMode(id)} title={preset.description}>
+                    {preset.label}
+                  </ToolbarButton>
+                ))}
+              </div>
+            </div>
+
+            {activeTool.kind === "eraser" && (
+              <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+                <SectionTitle>Eraser mode</SectionTitle>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <ToolbarButton compact active={activeTool.eraserMode === "area"} onClick={() => updateActiveToolConfig("eraserMode", "area")}>Area</ToolbarButton>
+                  <ToolbarButton compact active={activeTool.eraserMode === "stroke"} onClick={() => updateActiveToolConfig("eraserMode", "stroke")}>Stroke</ToolbarButton>
+                </div>
+                <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+                  Areaは触れた範囲だけを消します。Strokeは触れた線を丸ごと消します。
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <SectionTitle>Tool rail</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                {TOOL_ORDER.map((toolId) => (
+                  <ToolbarButton compact key={toolId} active={activeToolId === toolId} onClick={() => selectTool(toolId)} title={toolConfigs[toolId].description}>
+                    {toolConfigs[toolId].icon} {toolConfigs[toolId].label}
+                  </ToolbarButton>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
               <SectionTitle>Zoom</SectionTitle>
               <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
-                二本指でピンチイン/アウトできます。ピンチ中は線を描かないため、誤描画を防げます。
+                二本指ピンチで拡大縮小できます。ピンチ中は描画しません。
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, scale: clamp(v.scale * 1.2, 0.65, 4) }))}>＋Zoom</ToolbarButton>
                 <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, scale: clamp(v.scale / 1.2, 0.65, 4) }))}>−Zoom</ToolbarButton>
                 <ToolbarButton compact active={false} onClick={resetZoom}>Reset</ToolbarButton>
                 <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, x: 0, y: 0 }))}>Center</ToolbarButton>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
-              <SectionTitle>OneDrive share flow</SectionTitle>
-              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
-                Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。
-              </div>
-              <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.55 }}>
-                Galaxy AI Select / Smart Selectで範囲を切り抜き、共有先としてPencil Roomを選ぶと画像貼り込みできます。
               </div>
             </div>
 
@@ -1587,32 +1793,10 @@ export default function PencilRoomZFoldPinchPWA() {
             </div>
 
             <div style={{ display: "grid", gap: 8 }}>
-              <SectionTitle>Input</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
-                {Object.entries(INPUT_MODE_PRESETS).map(([id, preset]) => (
-                  <ToolbarButton compact key={id} active={inputMode === id} onClick={() => setInputMode(id)} title={preset.description}>
-                    {preset.label}
-                  </ToolbarButton>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 8 }}>
-              <SectionTitle>Pen</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                {Object.entries(TOOL_PRESETS).map(([id, preset]) => (
-                  <ToolbarButton compact key={id} active={tool === id} onClick={() => applyToolPreset(id)} title={preset.description}>
-                    {preset.label}
-                  </ToolbarButton>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Density</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {DENSITY_PRESETS.map((preset) => (
-                  <ToolbarButton compact key={preset.id} active={Math.abs(density - preset.value) < 0.04} onClick={() => setDensity(preset.value)}>
+                  <ToolbarButton compact key={preset.id} active={Math.abs(activeTool.density - preset.value) < 0.04} onClick={() => updateActiveToolConfig("density", preset.value)} disabled={!activeIsDrawingTool}>
                     {preset.label}
                   </ToolbarButton>
                 ))}
@@ -1620,15 +1804,29 @@ export default function PencilRoomZFoldPinchPWA() {
             </div>
 
             <div style={{ display: "grid", gap: 13, borderRadius: 22, background: "rgba(255,255,255,0.58)", padding: 14 }}>
-              <RangeControl label="width" value={width} onChange={setWidth} min={0.7} max={16} step={0.1} format={(v) => v.toFixed(1)} />
-              <RangeControl label="opacity" value={opacity} onChange={setOpacity} min={0.04} max={1} step={0.01} />
-              <RangeControl label="smoothing" value={smoothing} onChange={setSmoothing} min={0} max={0.9} step={0.01} />
-              <RangeControl label="pressure response" value={pressure} onChange={setPressure} min={0} max={1.4} step={0.01} />
+              <RangeControl label="width" value={activeTool.width} onChange={(v) => updateActiveToolConfig("width", v)} min={activeTool.kind === "eraser" ? 4 : 0.7} max={activeTool.kind === "eraser" ? 64 : 18} step={0.1} format={(v) => v.toFixed(1)} disabled={!activeIsDrawingTool} />
+              <RangeControl label="opacity" value={activeTool.opacity} onChange={(v) => updateActiveToolConfig("opacity", v)} min={0.04} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
+              <RangeControl label="smoothing" value={activeTool.smoothing} onChange={(v) => updateActiveToolConfig("smoothing", v)} min={0} max={0.9} step={0.01} disabled={!activeIsDrawingTool} />
+              <RangeControl label="pressure response" value={activeTool.pressure} onChange={(v) => updateActiveToolConfig("pressure", v)} min={0} max={1.4} step={0.01} disabled={!activeIsDrawingTool} />
+              <RangeControl label="velocity response" value={activeTool.velocity} onChange={(v) => updateActiveToolConfig("velocity", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
+              <RangeControl label="grain" value={activeTool.grain} onChange={(v) => updateActiveToolConfig("grain", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
               <RangeControl label="S Pen pressure floor" value={pressureFloor} onChange={setPressureFloor} min={0.02} max={0.55} step={0.01} />
               <RangeControl label="S Pen pressure gain" value={pressureGain} onChange={setPressureGain} min={0.6} max={4} step={0.05} format={(v) => v.toFixed(2)} />
-              <RangeControl label="velocity" value={velocity} onChange={setVelocity} min={0} max={1} step={0.01} />
-              <RangeControl label="grain" value={grain} onChange={setGrain} min={0} max={1} step={0.01} />
               <RangeControl label="paper tooth" value={paperTooth} onChange={setPaperTooth} min={0} max={1} step={0.01} />
+            </div>
+
+            {selectedImageId && (
+              <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 18, padding: 12 }}>
+                <SectionTitle>Selected image</SectionTitle>
+                <ToolbarButton compact active={false} onClick={deleteSelectedImage}>画像削除</ToolbarButton>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>OneDrive share flow</SectionTitle>
+              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
+                Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。
+              </div>
             </div>
           </aside>
         </div>
@@ -1679,33 +1877,38 @@ export function runBasicPenEngineTests() {
   assert("quadratic end", q1.x === qEnd.x && q1.y === qEnd.y);
 
   assert("pressure curve is monotonic", pressureCurve(0.8) > pressureCurve(0.4));
-  assert("silky preset exists", !!TOOL_PRESETS.silkyPen);
-  assert("technical is smoother than pencil", TOOL_PRESETS.technical.smoothing > TOOL_PRESETS.pencil.smoothing);
-  assert("dark density darker than natural", DENSITY_PRESETS.find((x) => x.id === "dark").value > DENSITY_PRESETS.find((x) => x.id === "natural").value);
-  assert("silky pen grain default is clean", TOOL_PRESETS.silkyPen.grain === 0);
-  assert("silky pen suppresses low grain dots", computeGrainDotCount(100, 0.04, "silkyPen") === 0);
-  assert("pencil can still render grain dots", computeGrainDotCount(100, 0.64, "pencil") > 0);
-  assert("widescreen slide ratio is 16:9", Math.abs(SLIDE_PRESETS.widescreen.ratio - 16 / 9) < 0.0001);
-  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
-
-  const page = makeEmptyPage(3);
-  assert("empty page has name", page.name === "Page 03");
-  assert("empty page has no images", page.images.length === 0);
-  assert("image miss returns null", getImageHit([], 0, 0) === null);
-  assert("image hit move", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 40, 40)?.mode === "move");
-  assert("image hit resize", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 110, 90)?.mode === "resize");
-  assert("paper presets include warm", !!PAPER_PRESETS.warm);
-  assert("paper preset has color", PAPER_PRESETS.blue.color.startsWith("#"));
-  assert("charcoal is dark paper", PAPER_PRESETS.charcoal.color === "#242424");
+  assert("silky config exists", !!DEFAULT_TOOL_CONFIGS.silkyPen);
+  assert("technical is smoother than pencil", DEFAULT_TOOL_CONFIGS.technical.smoothing > DEFAULT_TOOL_CONFIGS.pencil.smoothing);
+  assert("eraser has area mode by default", DEFAULT_TOOL_CONFIGS.eraser.eraserMode === "area");
   assert("two pointers begin pinch", shouldBeginPinch(2) === true);
   assert("one pointer does not begin pinch", shouldBeginPinch(1) === false);
   assert("pen only allows pen", isPointerAllowedForDrawing("pen", "penOnly") === true);
   assert("pen only rejects touch drawing", isPointerAllowedForDrawing("touch", "penOnly") === false);
   assert("finger only allows touch", isPointerAllowedForDrawing("touch", "fingerOnly") === true);
   assert("pen pressure floor helps light strokes", normalizePointerPressure({ pointerType: "pen", pressure: 0.02 }, { pressureFloor: 0.24, pressureGain: 2.2 }) > 0.25);
-  const pinchViewport = getNextViewportForPinch({ scale: 1, x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 20 }, 100, 200);
-  assert("pinch doubles scale", Math.abs(pinchViewport.scale - 2) < 0.0001);
-  assert("pinch pans by midpoint delta", pinchViewport.x === 10 && pinchViewport.y === 20);
+
+  const stroke = {
+    id: "s",
+    kind: "ink",
+    settings: { width: 4 },
+    points: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+    ],
+  };
+  assert("stroke hit test detects nearby point", strokeHitTest(stroke, { x: 50, y: 3 }, 6) === true);
+  assert("stroke hit test rejects far point", strokeHitTest(stroke, { x: 50, y: 30 }, 6) === false);
+
+  const page = makeEmptyPage(3);
+  assert("empty page has name", page.name === "Page 03");
+  assert("empty page has no images", page.images.length === 0);
+  assert("empty page has no strokes", page.strokes.length === 0);
+  assert("clone page copies strokes array", clonePage({ ...page, strokes: [stroke] }).strokes !== page.strokes);
+  assert("image miss returns null", getImageHit([], 0, 0) === null);
+  assert("image hit move", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 40, 40)?.mode === "move");
+  assert("image hit resize", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 110, 90)?.mode === "resize");
+  assert("paper presets include warm", !!PAPER_PRESETS.warm);
+  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
 
   return results;
@@ -1721,6 +1924,8 @@ export const __testables = {
   computeStrokeStyle,
   shouldRenderGrain,
   computeGrainDotCount,
+  pointToSegmentDistance,
+  strokeHitTest,
   getImageHit,
   getClientMidpoint,
   getClientDistance,
@@ -1729,8 +1934,9 @@ export const __testables = {
   isPointerAllowedForDrawing,
   normalizePointerPressure,
   makeEmptyPage,
+  clonePage,
   PAPER_PRESETS,
   SLIDE_PRESETS,
-  TOOL_PRESETS,
+  DEFAULT_TOOL_CONFIGS,
   DENSITY_PRESETS,
 };

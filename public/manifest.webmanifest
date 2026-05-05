@@ -1,7 +1,7 @@
 {
-  "name": "Pencil Room v5.4",
+  "name": "Pencil Room v5.5",
   "short_name": "Pencil Room",
-  "description": "White high-resolution Z Fold handwriting PWA with subtle ink pooling and slide PNG export.",
+  "description": "Z Fold note PWA with restored tool rail, opacity-safe pen texture, ink pooling, and slide PNG export.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

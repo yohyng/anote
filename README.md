@@ -45,15 +45,15 @@ Output Directory: dist
 ```
 
 
-## v5.4.0 PWA update behavior
+## v5.5.0 PWA update behavior
 
 This patch fixes a likely version-update issue in installed PWAs.
 
 What changed:
-- `APP_VERSION` is now `v5.4.0`.
-- `public/sw.js` uses a versioned cache name: `pencil-room-app-v5.4.0`.
+- `APP_VERSION` is now `v5.5.0`.
+- `public/sw.js` uses a versioned cache name: `pencil-room-app-v5.5.0`.
 - Legacy app caches such as `pencil-room-v2` are deleted on Service Worker activation.
-- `src/main.jsx` registers `/sw.js?v=v5.4.0` with `updateViaCache: "none"`.
+- `src/main.jsx` registers `/sw.js?v=v5.5.0` with `updateViaCache: "none"`.
 - The app shows an `Update` button when a waiting Service Worker is detected.
 - Settings includes a PWA update section.
 
@@ -64,29 +64,40 @@ If Android still shows an older version:
 4. As a developer check: Chrome DevTools > Application > Service Workers > Update / Unregister.
 
 
-## v5.4.0 updates
+## v5.5.0 updates
 
 - Galaxy Z Fold split-screen / narrow vertical layout support.
 - Header buttons and bottom tool rail are horizontally scrollable and compact on narrow widths.
 - UI shell changed to a stricter black/white palette.
 - Canvas content is scaled when the app window is resized, so handwriting and pasted images keep their relative position and apparent scale.
-- Service Worker cache version updated to v5.4.0.
+- Service Worker cache version updated to v5.5.0.
 
 
-## v5.4.0 updates
+## v5.5.0 updates
 
 - Canvas is true white by default.
 - Removed the on-canvas tool/mode/zoom overlay so Z Fold split-screen stays clean.
 - Tool selection remains available from the header tool button and Settings.
 - Increased canvas backing resolution with a capped boost for smoother handwriting when zoomed.
 - Lowered live point threshold for smoother Bezier-style curves.
-- Service Worker cache version updated to v5.4.0.
+- Service Worker cache version updated to v5.5.0.
 
 
-## v5.4.0 updates
+## v5.5.0 updates
 
 - Added subtle ink pooling / たまり behavior.
 - Pooling is strongest during slower, slightly higher-pressure strokes and around curves.
 - Added `ink pooling / たまり` slider per drawing tool.
 - Default is intentionally weak to avoid fake-looking blobs.
-- Updated PWA cache/version to v5.4.0.
+- Updated PWA cache/version to v5.5.0.
+
+
+## v5.5.0 updates
+
+- Restored the bottom tool rail for quick tool switching on Galaxy Z Fold.
+- Pressing the active tool again opens the tool settings panel.
+- Reduced black-dot artifacts:
+  - texture dots no longer use a forced minimum alpha
+  - graphite particles now follow opacity/density
+  - ink pooling underpass is softer and opacity-safe
+- Canvas reserves extra bottom space for the restored tool rail.

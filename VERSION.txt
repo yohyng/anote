@@ -1,7 +1,10 @@
-Pencil Room v5.4.0
+Pencil Room v5.5.0
 
 Updates:
-- Subtle ink pooling / たまり
-- Pooling responds to low speed, pressure, and curve/corner amount
-- Per-tool ink pooling slider
-- PWA cache version updated
+- Restored bottom tool rail.
+- Tapping the currently active tool opens its settings panel.
+- Canvas reserves space for the bottom tool rail on Z Fold split-screen.
+- Texture/grain dots no longer force a minimum black alpha.
+- Ink pooling underpass and graphite particles now follow opacity/density more strictly.
+- Default graphite grain/pooling slightly reduced to avoid black-dot artifacts.
+- PWA cache/version updated.

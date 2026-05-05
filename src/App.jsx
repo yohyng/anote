@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v5.4
+ * Pencil Room / Galaxy Z Fold PWA v5.5
  * Self-contained React component. No external UI/icon libraries.
  *
- * v5.4 subtle ink pooling:
+ * v5.5 tool rail + opacity-safe texture:
  * - Versioned Service Worker cache
  * - In-app update notification
  * - Low-latency live ink path inspired by Concepts-style drawing feel
  * - Direct incremental drawing while writing; rich redraw only after stroke commit
  * - More sensitive S Pen pressure calibration
- * - Tool rail moved into Settings to keep the canvas visually clean
+ * - Bottom tool rail is restored for fast Z Fold note taking
  * - Per-tool saved settings
  * - Eraser supports area erase and stroke erase
  * - Stroke model for future editing
@@ -21,10 +21,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Higher backing resolution for smoother zoomed handwriting
  * - Paste / file / drag-drop image import
  * - Subtle ink pooling / line accumulation for Concepts-like pen feel
+ * - Opacity-safe texture dots to prevent black-dot artifacts
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v5.4.0";
+const APP_VERSION = "v5.5.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -61,7 +62,7 @@ const DEFAULT_TOOL_CONFIGS = {
     velocity: 0.12,
     grain: 0,
     density: 1,
-    inkPooling: 0.18,
+    inkPooling: 0.16,
   },
   pencil: {
     id: "pencil",
@@ -74,9 +75,9 @@ const DEFAULT_TOOL_CONFIGS = {
     smoothing: 0.34,
     pressure: 0.85,
     velocity: 0.28,
-    grain: 0.48,
-    density: 1.08,
-    inkPooling: 0.06,
+    grain: 0.38,
+    density: 1.04,
+    inkPooling: 0.04,
   },
   technical: {
     id: "technical",
@@ -197,6 +198,13 @@ function quadraticPoint(start, control, end, t) {
 
 function rgba(color, alpha) {
   return `rgba(${color.r}, ${color.g}, ${color.b}, ${clamp(alpha, 0, 1)})`;
+}
+
+function textureAlpha(style, factor, maxRatio = 0.16) {
+  const baseAlpha = clamp(style?.alpha ?? 0, 0, 1);
+  if (baseAlpha <= 0 || factor <= 0) return 0;
+  // Never force a minimum alpha. Texture must always fade with the current opacity/density.
+  return clamp(baseAlpha * factor, 0, Math.min(baseAlpha * maxRatio, 0.22));
 }
 
 function nowId(prefix = "id") {
@@ -451,8 +459,9 @@ function strokePath(ctx, start, control, end, style, kind) {
 
   if (kind === "ink" || kind === "marker") {
     const pool = style.pool || 0;
-    ctx.strokeStyle = rgba(INK_COLOR, style.alpha * (kind === "marker" ? 0.16 + pool * 0.04 : 0.055 + pool * 0.06));
-    ctx.lineWidth = style.width * (kind === "marker" ? 1.8 + pool * 0.28 : 1.28 + pool * 0.42);
+    const underpassFactor = kind === "marker" ? 0.13 + pool * 0.025 : 0.038 + pool * 0.032;
+    ctx.strokeStyle = rgba(INK_COLOR, textureAlpha(style, underpassFactor, kind === "marker" ? 0.2 : 0.13));
+    ctx.lineWidth = style.width * (kind === "marker" ? 1.75 + pool * 0.2 : 1.22 + pool * 0.26);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
@@ -483,18 +492,20 @@ function drawRoundCurveSegment(ctx, p0, p1, p2, settings, kind, seed = 1) {
   const rng = seededRandom(seed);
   const tangentAngle = Math.atan2(end.y - start.y, end.x - start.x);
   ctx.save();
-  ctx.globalCompositeOperation = "multiply";
+  ctx.globalCompositeOperation = kind === "marker" ? "multiply" : "source-over";
 
   for (let i = 0; i < dots; i += 1) {
     const t = rng();
     const point = quadraticPoint(start, p1, end, t);
-    const side = (rng() - 0.5) * style.width * 0.72;
+    const side = (rng() - 0.5) * style.width * 0.62;
     const px = point.x + Math.cos(tangentAngle + Math.PI / 2) * side;
     const py = point.y + Math.sin(tangentAngle + Math.PI / 2) * side;
-    const textureAlpha = kind === "ink" ? 0.004 : kind === "marker" ? 0.009 : 0.028 + rng() * 0.05;
-    ctx.fillStyle = rgba(INK_COLOR, style.alpha * textureAlpha);
+    const factor = kind === "ink" ? 0.0016 + rng() * 0.002 : kind === "marker" ? 0.004 + rng() * 0.004 : 0.012 + rng() * 0.026;
+    const alpha = textureAlpha(style, factor, kind === "ink" ? 0.035 : 0.09);
+    if (alpha <= 0.0005) continue;
+    ctx.fillStyle = rgba(INK_COLOR, alpha);
     ctx.beginPath();
-    ctx.ellipse(px, py, Math.max(0.06, style.width * 0.045), Math.max(0.05, style.width * 0.035), tangentAngle, 0, Math.PI * 2);
+    ctx.ellipse(px, py, Math.max(0.04, style.width * 0.032), Math.max(0.035, style.width * 0.026), tangentAngle, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -521,8 +532,9 @@ function drawGraphiteSegment(ctx, from, to, settings, seed = 1) {
     const forward = (rng() - 0.5) * style.width * 0.2;
     const px = x + Math.cos(angle + Math.PI / 2) * side + Math.cos(angle) * forward;
     const py = y + Math.sin(angle + Math.PI / 2) * side + Math.sin(angle) * forward;
-    const r = style.width * (0.16 + rng() * 0.22);
-    const alpha = clamp(style.alpha * (0.025 + rng() * 0.07), 0.004, 0.34);
+    const r = style.width * (0.13 + rng() * 0.18);
+    const alpha = textureAlpha(style, 0.010 + rng() * 0.032, 0.105);
+    if (alpha <= 0.0005) continue;
 
     ctx.fillStyle = rgba(INK_COLOR, alpha);
     ctx.beginPath();
@@ -598,9 +610,9 @@ function drawTapDot(ctx, point, settings, kind) {
   const radius = kind === "marker" ? style.width * 0.32 : kind === "pencil" ? style.width * 0.1 : style.width * 0.16;
   ctx.save();
   ctx.globalCompositeOperation = kind === "marker" || kind === "pencil" ? "multiply" : "source-over";
-  ctx.fillStyle = rgba(INK_COLOR, style.alpha * 0.45);
+  ctx.fillStyle = rgba(INK_COLOR, textureAlpha(style, 0.34, 0.34));
   ctx.beginPath();
-  ctx.arc(point.x, point.y, Math.max(0.18, radius), 0, Math.PI * 2);
+  ctx.arc(point.x, point.y, Math.max(0.14, radius), 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -903,7 +915,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v5.4：ペンにごく薄いインクだまりを追加しました。強すぎる場合は ink pooling を下げてください。");
+  const [status, setStatus] = useState("v5.5：下部ツールレールを復活。選択中ツールをもう一度押すと設定を開きます。");
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [windowSize, setWindowSize] = useState(() => ({ width: typeof window === "undefined" ? 1024 : window.innerWidth, height: typeof window === "undefined" ? 768 : window.innerHeight }));
   const updateRegistrationRef = useRef(null);
@@ -928,7 +940,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const isVeryNarrowViewport = windowSize.width < 430;
   const isShortViewport = windowSize.height < 640;
   const headerHeight = isNarrowViewport ? 46 : 54;
-  const canvasReserveHeight = isNarrowViewport ? 106 : 92;
+  const canvasReserveHeight = isNarrowViewport ? 152 : 140;
   const shellPadding = isNarrowViewport ? 4 : 10;
   const chromeBorder = "1px solid #d4d4d4";
   const panelBackground = "#fff";
@@ -1003,6 +1015,16 @@ export default function PencilRoomZFoldDrawingUXV4() {
     } else {
       setStatus(`${tool?.label || "Tool"}：この道具の設定は個別に保存されます。`);
     }
+  }
+
+  function handleToolRailPress(toolId) {
+    if (activeToolId === toolId) {
+      setShowPanel(true);
+      const tool = toolConfigs[toolId] || DEFAULT_TOOL_CONFIGS[toolId];
+      setStatus(`${tool?.label || "Tool"} の設定を開きました。下部ツールをもう一度押すと設定を調整できます。`);
+      return;
+    }
+    selectTool(toolId);
   }
 
   function setupCanvases(preserveDrawing = true) {
@@ -1796,6 +1818,40 @@ export default function PencilRoomZFoldDrawingUXV4() {
             )}
           </div>
 
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: shellPadding + 4,
+              transform: "translateX(-50%)",
+              display: "flex",
+              alignItems: "center",
+              gap: isNarrowViewport ? 5 : 7,
+              maxWidth: `calc(100vw - ${shellPadding * 2 + 8}px)`,
+              overflowX: "auto",
+              padding: isNarrowViewport ? 5 : 6,
+              borderRadius: 999,
+              border: chromeBorder,
+              background: "rgba(255,255,255,.94)",
+              boxShadow: "0 10px 28px rgba(0,0,0,.08)",
+              zIndex: 16,
+              scrollbarWidth: "none",
+            }}
+            aria-label="tool rail"
+          >
+            {TOOL_ORDER.map((toolId) => (
+              <ToolRailButton
+                key={toolId}
+                active={activeToolId === toolId}
+                tool={toolConfigs[toolId]}
+                onClick={() => handleToolRailPress(toolId)}
+              />
+            ))}
+            <div style={{ width: 1, height: isNarrowViewport ? 28 : 34, background: "#d4d4d4", flex: "0 0 auto", margin: "0 2px" }} />
+            <ToolRailButton active={false} tool={{ icon: "＋", description: "New page" }} onClick={addPage} />
+            <ToolRailButton active={false} tool={{ icon: "100", description: "Zoom reset" }} onClick={resetZoom} />
+          </div>
+
           {status && (
             <div style={{ position: "absolute", right: shellPadding + 2, top: shellPadding + 2, maxWidth: isNarrowViewport ? "calc(100vw - 18px)" : 320, borderRadius: 999, background: "rgba(255,255,255,.82)", border: chromeBorder, padding: "3px 7px", fontSize: 9, color: "#525252", lineHeight: 1.35, pointerEvents: "none", whiteSpace: isVeryNarrowViewport ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis" }}>
               {status}
@@ -1900,7 +1956,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
               <SectionTitle>Tool rail</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
                 {TOOL_ORDER.map((toolId) => (
-                  <ToolbarButton compact key={toolId} active={activeToolId === toolId} onClick={() => selectTool(toolId)} title={toolConfigs[toolId].description}>
+                  <ToolbarButton compact key={toolId} active={activeToolId === toolId} onClick={() => handleToolRailPress(toolId)} title={toolConfigs[toolId].description}>
                     {toolConfigs[toolId].icon} {toolConfigs[toolId].label}
                   </ToolbarButton>
                 ))}
@@ -2090,6 +2146,8 @@ export function runBasicPenEngineTests() {
   assert("stroke hit test rejects far point", strokeHitTest(stroke, { x: 50, y: 30 }, 6) === false);
   assert("turn amount detects corner", turnAmount({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }) > 0.5);
   assert("ink pooling increases slow styles", computeStrokeStyle({ x: 0, y: 0, pressure: 0.8, time: 0 }, { x: 0.1, y: 0, pressure: 0.8, time: 30 }, { width: 3, opacity: 0.9, density: 1, pressure: 0.6, velocity: 0.1, inkPooling: 0.2 }, "ink", 0.5).pool > 0);
+  assert("texture alpha follows base opacity", textureAlpha({ alpha: 0.05 }, 0.5, 0.2) <= 0.01);
+  assert("texture alpha becomes zero when base alpha is zero", textureAlpha({ alpha: 0 }, 0.5, 0.2) === 0);
 
   const page = makeEmptyPage(3);
   assert("empty page has name", page.name === "Page 03");
@@ -2102,7 +2160,7 @@ export function runBasicPenEngineTests() {
   assert("paper presets include warm", !!PAPER_PRESETS.warm);
   assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
-  assert("app version is v5.4.0", APP_VERSION === "v5.4.0");
+  assert("app version is v5.5.0", APP_VERSION === "v5.5.0");
   assert("white paper preset is true white", PAPER_PRESETS.white.color === "#ffffff");
   assert("backing scale is boosted but capped", getCanvasBackingScale(3) <= MAX_CANVAS_BACKING_SCALE && getCanvasBackingScale(1) > 1);
   const resizedPage = scalePageForResize({ ...page, strokes: [{ id: "s", points: [{ x: 10, y: 20 }], settings: {} }], images: [{ id: "i", x: 10, y: 10, width: 100, height: 50 }] }, { width: 100, height: 100 }, { width: 200, height: 300 });

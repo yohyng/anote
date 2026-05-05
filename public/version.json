@@ -1,5 +1,6 @@
 {
-  "version": "v5.4.0",
-  "build": "2026-05-05-subtle-ink-pooling",
-  "notes": "Adds subtle low-speed/pressure/corner ink pooling for more natural pen accumulation."
+  "version": "v5.5.0",
+  "name": "Pencil Room",
+  "updatedAt": "2026-05-05",
+  "notes": "Restored bottom tool rail. Tapping active tool opens settings. Texture dots now follow opacity/density to reduce black artifacts."
 }

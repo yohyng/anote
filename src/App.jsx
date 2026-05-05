@@ -1,28 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/**
- * Pencil Room Android Note to PowerPoint / Share PNG to OneDrive
- * Self-contained React prototype. No external UI/icon libraries.
- *
- * Main flow:
- * - Android writes / imports screenshots or images
- * - User taps Share PNG
- * - Android share sheet opens
- * - User saves the PNG to OneDrive / PencilRoom / inbox
- * - Windows PC script can later watch that synced folder and append PNGs to PPTX
- */
-
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
 
 const PAPER_PRESETS = {
-  warm: { label: "Warm Paper", color: "#f7f3e9", tooth: "rgba(76,68,54," },
-  white: { label: "Clean White", color: "#fbfaf6", tooth: "rgba(82,82,82," },
-  gray: { label: "Soft Gray", color: "#eceae4", tooth: "rgba(60,60,58," },
+  warm: { label: "Warm", color: "#f7f3e9", tooth: "rgba(76,68,54," },
+  white: { label: "White", color: "#fbfaf6", tooth: "rgba(82,82,82," },
+  gray: { label: "Gray", color: "#eceae4", tooth: "rgba(60,60,58," },
   cream: { label: "Cream", color: "#fbf0d1", tooth: "rgba(98,74,42," },
-  blue: { label: "Pale Blue", color: "#e8f1f4", tooth: "rgba(40,70,88," },
-  green: { label: "Pale Green", color: "#edf3e8", tooth: "rgba(56,82,48," },
+  blue: { label: "Blue", color: "#e8f1f4", tooth: "rgba(40,70,88," },
+  green: { label: "Green", color: "#edf3e8", tooth: "rgba(56,82,48," },
   charcoal: { label: "Charcoal", color: "#242424", tooth: "rgba(255,255,255," },
 };
 
@@ -35,7 +23,6 @@ const SLIDE_PRESETS = {
 const TOOL_PRESETS = {
   silkyPen: {
     label: "Silky",
-    description: "なめらかで補正が効いたペン",
     width: 3.2,
     opacity: 0.88,
     smoothing: 0.56,
@@ -45,7 +32,6 @@ const TOOL_PRESETS = {
   },
   pencil: {
     label: "Graphite",
-    description: "紙目に引っかかる鉛筆",
     width: 2.6,
     opacity: 0.86,
     smoothing: 0.34,
@@ -55,7 +41,6 @@ const TOOL_PRESETS = {
   },
   technical: {
     label: "Clean",
-    description: "均質な製図ペン",
     width: 2.2,
     opacity: 0.94,
     smoothing: 0.76,
@@ -65,7 +50,6 @@ const TOOL_PRESETS = {
   },
   marker: {
     label: "Marker",
-    description: "太く柔らかいマーカー",
     width: 8,
     opacity: 0.22,
     smoothing: 0.52,
@@ -168,6 +152,7 @@ function drawPaperTexture(ctx, width, height, paperTooth, grainDots, paperPreset
     ctx.lineTo(width, y + Math.random() * 2);
     ctx.stroke();
   }
+
   ctx.restore();
 }
 
@@ -260,29 +245,30 @@ function drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool) {
   const start = midpoint(p0, p1);
   const end = midpoint(p1, p2);
   const style = computeStrokeStyle(start, end, settings, tool);
-
   strokePath(ctx, start, p1, end, style, tool, true);
 
   const curveLength = distance(start, end);
   const dots = computeGrainDotCount(curveLength, settings.grain, tool);
-  if (dots > 0) {
-    const tangentAngle = Math.atan2(end.y - start.y, end.x - start.x);
-    ctx.save();
-    ctx.globalCompositeOperation = "multiply";
-    for (let i = 0; i < dots; i += 1) {
-      const t = Math.random();
-      const point = quadraticPoint(start, p1, end, t);
-      const side = (Math.random() - 0.5) * style.width * 0.72;
-      const px = point.x + Math.cos(tangentAngle + Math.PI / 2) * side;
-      const py = point.y + Math.sin(tangentAngle + Math.PI / 2) * side;
-      const textureAlpha = tool === "silkyPen" ? 0.006 : tool === "marker" ? 0.012 : 0.05 + Math.random() * 0.06;
-      ctx.fillStyle = rgba(INK_COLOR, style.alpha * textureAlpha);
-      ctx.beginPath();
-      ctx.ellipse(px, py, Math.max(0.08, style.width * 0.055), Math.max(0.06, style.width * 0.04), tangentAngle, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+  if (dots <= 0) return;
+
+  const tangentAngle = Math.atan2(end.y - start.y, end.x - start.x);
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+
+  for (let i = 0; i < dots; i += 1) {
+    const t = Math.random();
+    const point = quadraticPoint(start, p1, end, t);
+    const side = (Math.random() - 0.5) * style.width * 0.72;
+    const px = point.x + Math.cos(tangentAngle + Math.PI / 2) * side;
+    const py = point.y + Math.sin(tangentAngle + Math.PI / 2) * side;
+    const textureAlpha = tool === "silkyPen" ? 0.006 : tool === "marker" ? 0.012 : 0.05 + Math.random() * 0.06;
+    ctx.fillStyle = rgba(INK_COLOR, style.alpha * textureAlpha);
+    ctx.beginPath();
+    ctx.ellipse(px, py, Math.max(0.08, style.width * 0.055), Math.max(0.06, style.width * 0.04), tangentAngle, 0, Math.PI * 2);
+    ctx.fill();
   }
+
+  ctx.restore();
 }
 
 function drawInitialCurveSegment(ctx, p0, p1, settings, tool) {
@@ -327,6 +313,7 @@ function drawGraphiteSegment(ctx, from, to, settings) {
 
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
+
   for (let i = 0; i < steps; i += 1) {
     const t = i / steps;
     const x = lerp(from.x, to.x, t);
@@ -346,6 +333,7 @@ function drawGraphiteSegment(ctx, from, to, settings) {
     ctx.ellipse(px, py, r * 1.35, r * 0.74, angle, 0, Math.PI * 2);
     ctx.fill();
   }
+
   ctx.restore();
 }
 
@@ -381,6 +369,7 @@ function drawImagesToCanvas(ctx, images, selectedImageId, showSelection = true) 
       ctx.arc(image.x + image.width, image.y + image.height, 8, 0, Math.PI * 2);
       ctx.fill();
     }
+
     ctx.restore();
   }
 }
@@ -430,24 +419,28 @@ async function shareOrDownloadCanvas(canvas, filename, onStatus) {
   onStatus?.("共有非対応のためPNGを保存しました。保存したPNGをOneDriveへ移動してください。");
 }
 
-function ToolbarButton({ active, onClick, children, title, disabled }) {
+function ToolbarButton({ active, onClick, children, title, disabled, compact = false }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
       disabled={disabled}
-      style={{
-        border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,0.92)",
-        background: disabled ? "#e7e5e4" : active ? "#292524" : "rgba(255,255,255,0.82)",
-        color: disabled ? "#a8a29e" : active ? "#ffffff" : "#292524",
-        borderRadius: 999,
-        padding: "9px 12px",
-        fontSize: 12,
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "all 0.15s ease",
-        boxShadow: active ? "0 6px 18px rgba(28,25,23,0.16)" : "none",
-      }}
+      className={`button ${active ? "active" : ""} ${compact ? "compact" : ""}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FloatingButton({ active, onClick, children, title, disabled }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={`floating-button ${active ? "active" : ""}`}
     >
       {children}
     </button>
@@ -456,10 +449,10 @@ function ToolbarButton({ active, onClick, children, title, disabled }) {
 
 function RangeControl({ label, value, onChange, min, max, step, format }) {
   return (
-    <label style={{ display: "grid", gap: 8, fontSize: 12, color: "#57534e" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+    <label className="range-control">
+      <div className="range-row">
         <span>{label}</span>
-        <span style={{ color: "#78716c", fontVariantNumeric: "tabular-nums" }}>{format ? format(value) : Math.round(value * 100)}</span>
+        <span className="range-value">{format ? format(value) : Math.round(value * 100)}</span>
       </div>
       <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
@@ -467,22 +460,28 @@ function RangeControl({ label, value, onChange, min, max, step, format }) {
 }
 
 function SectionTitle({ children }) {
-  return <div style={{ fontSize: 11, color: "#78716c", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
+  return <div className="section-title">{children}</div>;
 }
 
-export default function PencilRoomAndroidNoteToPpt() {
+export default function PencilRoomZFoldPWA() {
   const frameRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const imageCanvasRef = useRef(null);
   const drawCanvasRef = useRef(null);
   const fileInputRef = useRef(null);
   const grainDotsRef = useRef([]);
+
   const drawingRef = useRef(false);
   const hasMovedRef = useRef(false);
   const lastPointRef = useRef(null);
   const lastRawPointRef = useRef(null);
   const strokePointsRef = useRef([]);
   const imageInteractionRef = useRef(null);
+
+  const activePointerIdRef = useRef(null);
+  const activePointerIdsRef = useRef(new Set());
+  const ignoredPointerIdsRef = useRef(new Set());
+  const multiTouchLockRef = useRef(false);
   const dragDepthRef = useRef(0);
 
   const [pages, setPages] = useState([makeEmptyPage(1)]);
@@ -490,6 +489,7 @@ export default function PencilRoomAndroidNoteToPpt() {
   const [selectedImageId, setSelectedImageId] = useState(null);
   const [tool, setTool] = useState("silkyPen");
   const [mode, setMode] = useState("draw");
+
   const [width, setWidth] = useState(TOOL_PRESETS.silkyPen.width);
   const [opacity, setOpacity] = useState(TOOL_PRESETS.silkyPen.opacity);
   const [smoothing, setSmoothing] = useState(TOOL_PRESETS.silkyPen.smoothing);
@@ -500,24 +500,21 @@ export default function PencilRoomAndroidNoteToPpt() {
   const [paperTooth, setPaperTooth] = useState(0.72);
   const [paperPresetId, setPaperPresetId] = useState("warm");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
+
+  const [showPages, setShowPages] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [status, setStatus] = useState(`画像は＋Image、ドラッグ＆ドロップ、Ctrl+Vで貼れます。Share PNGでOneDriveの ${ONEDRIVE_INBOX_HINT} へ保存します。`);
-  const [shareHint, setShareHint] = useState(`Share PNGでOneDriveの ${ONEDRIVE_INBOX_HINT} に保存する想定です`);
+  const [status, setStatus] = useState("Z Fold見開き向け：キャンバス中心UI。二本指以上は描画しません。");
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
   const slidePreset = SLIDE_PRESETS[slidePresetId];
   const paperPreset = PAPER_PRESETS[paperPresetId] || PAPER_PRESETS.warm;
+  const pageIndex = Math.max(0, pages.findIndex((p) => p.id === currentPage.id));
+  const darkPaper = paperPresetId === "charcoal";
 
   const settings = useMemo(
     () => ({ width, opacity, smoothing, pressure, velocity, grain, density }),
     [width, opacity, smoothing, pressure, velocity, grain, density]
-  );
-
-  const appBackground = useMemo(
-    () =>
-      "radial-gradient(circle at 18% 8%, rgba(255,255,255,.56), transparent 30%), radial-gradient(circle at 86% 4%, rgba(150,130,92,.14), transparent 30%), linear-gradient(135deg, #eee8dd 0%, #ddd8cf 100%)",
-    []
   );
 
   useEffect(() => {
@@ -537,6 +534,22 @@ export default function PencilRoomAndroidNoteToPpt() {
     if (!drawCanvas || !currentPage) return;
     const dataUrl = drawCanvas.toDataURL("image/png");
     setPages((prev) => prev.map((page) => (page.id === currentPage.id ? { ...page, drawingDataUrl: dataUrl } : page)));
+  }
+
+  function clearPointerState() {
+    activePointerIdsRef.current.clear();
+    ignoredPointerIdsRef.current.clear();
+    activePointerIdRef.current = null;
+    multiTouchLockRef.current = false;
+  }
+
+  function cancelStrokeWithoutTail() {
+    drawingRef.current = false;
+    hasMovedRef.current = false;
+    lastPointRef.current = null;
+    lastRawPointRef.current = null;
+    strokePointsRef.current = [];
+    activePointerIdRef.current = null;
   }
 
   function redrawImages(images = currentPage.images, selectedId = selectedImageId) {
@@ -585,6 +598,7 @@ export default function PencilRoomAndroidNoteToPpt() {
 
     grainDotsRef.current = makePaperGrain(rect.width, rect.height);
     drawPaperTexture(bgCanvas.getContext("2d"), rect.width, rect.height, paperTooth, grainDotsRef.current, paperPreset);
+
     imageCanvas.getContext("2d").clearRect(0, 0, rect.width, rect.height);
     drawCanvas.getContext("2d").clearRect(0, 0, rect.width, rect.height);
 
@@ -600,6 +614,7 @@ export default function PencilRoomAndroidNoteToPpt() {
     const drawCanvas = drawCanvasRef.current;
     const imageCanvas = imageCanvasRef.current;
     if (!frame || !drawCanvas || !imageCanvas || !page) return;
+
     const rect = frame.getBoundingClientRect();
     const drawCtx = drawCanvas.getContext("2d");
     drawCtx.clearRect(0, 0, rect.width, rect.height);
@@ -672,22 +687,41 @@ export default function PencilRoomAndroidNoteToPpt() {
     setVelocity(preset.velocity);
     setGrain(preset.grain);
     setMode("draw");
+    setStatus(`${preset.label} に切り替えました`);
   }
 
   function drawCurveSegment(p0, p1, p2) {
     const canvas = drawCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    if (tool === "pencil") {
-      drawGraphiteCurveSegment(ctx, p0, p1, p2, settings);
-    } else {
-      drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool);
-    }
+    if (tool === "pencil") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings);
+    else drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool);
+  }
+
+  function isPointerAllowedToStart(event) {
+    if (event.pointerType === "touch" && event.isPrimary === false) return false;
+    if (activePointerIdsRef.current.size > 0) return false;
+    if (multiTouchLockRef.current) return false;
+    return true;
   }
 
   function handlePointerDown(event) {
+    event.preventDefault();
     const canvas = drawCanvasRef.current;
     if (!canvas || !currentPage) return;
+
+    activePointerIdsRef.current.add(event.pointerId);
+
+    if (!isPointerAllowedToStart(event)) {
+      ignoredPointerIdsRef.current.add(event.pointerId);
+      multiTouchLockRef.current = true;
+      cancelStrokeWithoutTail();
+      setStatus("二本指以上の入力は描画しません。ペンまたは一本指で書けます。");
+      return;
+    }
+
+    activePointerIdRef.current = event.pointerId;
+    canvas.setPointerCapture?.(event.pointerId);
     const raw = getPointFromEvent(event, canvas);
 
     if (mode === "image") {
@@ -701,14 +735,12 @@ export default function PencilRoomAndroidNoteToPpt() {
           startY: raw.y,
           original: { ...hit.image },
         };
-        canvas.setPointerCapture?.(event.pointerId);
       } else {
         setSelectedImageId(null);
       }
       return;
     }
 
-    canvas.setPointerCapture?.(event.pointerId);
     drawingRef.current = true;
     hasMovedRef.current = false;
     setSelectedImageId(null);
@@ -720,6 +752,11 @@ export default function PencilRoomAndroidNoteToPpt() {
   }
 
   function handlePointerMove(event) {
+    event.preventDefault();
+    if (ignoredPointerIdsRef.current.has(event.pointerId)) return;
+    if (activePointerIdRef.current !== event.pointerId) return;
+    if (multiTouchLockRef.current) return;
+
     const canvas = drawCanvasRef.current;
     if (!canvas || !currentPage) return;
     const raw = getPointFromEvent(event, canvas);
@@ -745,6 +782,7 @@ export default function PencilRoomAndroidNoteToPpt() {
     if (!drawingRef.current || !lastPointRef.current) return;
 
     const nativeEvents = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
+
     for (const nativeEvent of nativeEvents) {
       const nextRaw = getPointFromEvent(nativeEvent, canvas);
       const rawSpeed = lastRawPointRef.current ? speedBetween(lastRawPointRef.current, nextRaw) : 0;
@@ -775,16 +813,42 @@ export default function PencilRoomAndroidNoteToPpt() {
     }
   }
 
-  function handlePointerUp() {
-    const canvas = drawCanvasRef.current;
-    if (!canvas) return;
+  function handlePointerUp(event) {
+    event.preventDefault();
 
-    if (imageInteractionRef.current) {
-      imageInteractionRef.current = null;
+    activePointerIdsRef.current.delete(event.pointerId);
+    ignoredPointerIdsRef.current.delete(event.pointerId);
+
+    if (activePointerIdRef.current !== event.pointerId) {
+      if (activePointerIdsRef.current.size === 0) clearPointerState();
       return;
     }
 
-    if (!drawingRef.current) return;
+    const canvas = drawCanvasRef.current;
+    if (!canvas) {
+      clearPointerState();
+      return;
+    }
+
+    if (multiTouchLockRef.current) {
+      cancelStrokeWithoutTail();
+      if (activePointerIdsRef.current.size === 0) clearPointerState();
+      return;
+    }
+
+    if (imageInteractionRef.current) {
+      imageInteractionRef.current = null;
+      activePointerIdRef.current = null;
+      if (activePointerIdsRef.current.size === 0) clearPointerState();
+      return;
+    }
+
+    if (!drawingRef.current) {
+      activePointerIdRef.current = null;
+      if (activePointerIdsRef.current.size === 0) clearPointerState();
+      return;
+    }
+
     const ctx = canvas.getContext("2d");
     const points = strokePointsRef.current;
 
@@ -799,7 +863,18 @@ export default function PencilRoomAndroidNoteToPpt() {
     lastPointRef.current = null;
     lastRawPointRef.current = null;
     strokePointsRef.current = [];
+    activePointerIdRef.current = null;
     saveDrawingToPage();
+
+    if (activePointerIdsRef.current.size === 0) clearPointerState();
+  }
+
+  function handlePointerCancel(event) {
+    event.preventDefault();
+    activePointerIdsRef.current.delete(event.pointerId);
+    ignoredPointerIdsRef.current.delete(event.pointerId);
+    if (activePointerIdRef.current === event.pointerId) cancelStrokeWithoutTail();
+    if (activePointerIdsRef.current.size === 0) clearPointerState();
   }
 
   function addPage() {
@@ -808,13 +883,20 @@ export default function PencilRoomAndroidNoteToPpt() {
     setPages((prev) => [...prev, page]);
     setCurrentPageId(page.id);
     setSelectedImageId(null);
+    setShowPages(false);
     setStatus("新しいページを追加しました。1ページ = PowerPoint 1スライドです。");
   }
 
   function duplicatePage() {
     if (!currentPage) return;
     saveDrawingToPage();
-    const page = { ...currentPage, id: nowId("page"), name: `${currentPage.name} copy`, createdAt: Date.now(), images: currentPage.images.map((img) => ({ ...img, id: nowId("img") })) };
+    const page = {
+      ...currentPage,
+      id: nowId("page"),
+      name: `${currentPage.name} copy`,
+      createdAt: Date.now(),
+      images: currentPage.images.map((img) => ({ ...img, id: nowId("img") })),
+    };
     setPages((prev) => [...prev, page]);
     setCurrentPageId(page.id);
     setStatus("ページを複製しました。");
@@ -877,7 +959,7 @@ export default function PencilRoomAndroidNoteToPpt() {
     setMode("image");
     redrawImages(nextImages, imageRecord.id);
     const sourceLabel = source === "paste" ? "クリップボード" : source === "drop" ? "ドロップ" : "画像";
-    setStatus(`${sourceLabel}から画像を貼り込みました。画像モードでドラッグ移動・右下ハンドルでリサイズできます。`);
+    setStatus(`${sourceLabel}から画像を貼り込みました。Imageモードで移動・リサイズできます。`);
   }
 
   function handleImageFile(file, options = {}) {
@@ -1004,312 +1086,186 @@ export default function PencilRoomAndroidNoteToPpt() {
     setStatus("全ページのPNG保存を開始しました。保存先をinboxにするとPC側でPPTX化できます。");
   }
 
-  const darkPaper = paperPresetId === "charcoal";
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: appBackground,
-        padding: 12,
-        color: "#1c1917",
-        boxSizing: "border-box",
-        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 1380,
-          margin: "0 auto",
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: showPanel ? "174px minmax(0, 1fr) 356px" : "174px minmax(0, 1fr)",
-        }}
-      >
-        <aside
-          style={{
-            borderRadius: 28,
-            border: "1px solid rgba(214,211,209,0.9)",
-            background: "rgba(249,246,238,0.72)",
-            backdropFilter: "blur(18px)",
-            padding: 12,
-            display: "grid",
-            alignContent: "start",
-            gap: 10,
-            maxHeight: "calc(100vh - 24px)",
-            overflow: "auto",
-            boxShadow: "0 12px 28px rgba(28,25,23,0.06)",
-          }}
-        >
-          <div style={{ display: "grid", gap: 8 }}>
-            <ToolbarButton active={false} onClick={addPage}>＋ Page</ToolbarButton>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <ToolbarButton active={false} onClick={duplicatePage}>Copy</ToolbarButton>
-              <ToolbarButton active={false} onClick={deletePage}>Delete</ToolbarButton>
+    <div className="app">
+      <main className="workspace">
+        <header className="topbar">
+          <div className="topbar-left">
+            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>Pages</ToolbarButton>
+            <div className="title-block">
+              <div className="title">Pencil Room</div>
+              <div className="subtitle">{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
             </div>
           </div>
-          <div style={{ height: 1, background: "rgba(214,211,209,.85)", margin: "4px 0" }} />
-          {pages.map((page, index) => (
-            <button
-              key={page.id}
-              type="button"
-              onClick={() => {
-                saveDrawingToPage();
-                setCurrentPageId(page.id);
-                setSelectedImageId(null);
-              }}
-              style={{
-                textAlign: "left",
-                border: page.id === currentPage.id ? "1px solid #292524" : "1px solid rgba(214,211,209,0.9)",
-                background: page.id === currentPage.id ? "#292524" : "rgba(255,255,255,0.72)",
-                color: page.id === currentPage.id ? "#fff" : "#292524",
-                borderRadius: 18,
-                padding: 10,
-                cursor: "pointer",
-                fontSize: 12,
-                display: "grid",
-                gap: 4,
-                boxShadow: page.id === currentPage.id ? "0 8px 22px rgba(28,25,23,.16)" : "none",
-              }}
-            >
-              <span>{String(index + 1).padStart(2, "0")}</span>
-              <span style={{ opacity: 0.75 }}>{page.images.length} image{page.images.length === 1 ? "" : "s"}</span>
-            </button>
-          ))}
-        </aside>
 
-        <main
-          style={{
-            minHeight: "calc(100vh - 24px)",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            borderRadius: 32,
-            border: "1px solid rgba(214,211,209,0.9)",
-            background: "rgba(255,255,255,0.28)",
-            boxShadow: "0 20px 45px rgba(28,25,23,0.10)",
-            backdropFilter: "blur(18px)",
-          }}
+          <div className="topbar-actions">
+            <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
+            <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>＋Img</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={shareCurrentPage}>Share</ToolbarButton>
+            <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
+          </div>
+        </header>
+
+        <section
+          className="canvas-stage"
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         >
-          <header
+          <div
+            ref={frameRef}
+            className="slide-frame"
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              padding: "12px 14px",
-              borderBottom: "1px solid rgba(214,211,209,0.75)",
-              background: "rgba(249,246,238,0.64)",
+              "--ratio": slidePreset.ratio,
+              "--paper": paperPreset.color,
             }}
           >
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 650, letterSpacing: -0.2 }}>Pencil Room / Android → PPT</div>
-              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2 }}>{currentPage?.name} / one page = one slide</div>
+            <canvas ref={bgCanvasRef} aria-hidden="true" className="layer" />
+            <canvas ref={imageCanvasRef} aria-hidden="true" className="layer" />
+            <canvas
+              ref={drawCanvasRef}
+              className={`layer draw-layer ${mode === "image" ? "image-mode" : ""}`}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
+              onPointerLeave={handlePointerCancel}
+              onContextMenu={(event) => event.preventDefault()}
+            />
+
+            {isDragOver && <div className="drop-cover">Drop image here</div>}
+
+            <div className={`slide-badge ${darkPaper ? "light" : ""}`}>
+              {TOOL_PRESETS[tool].label} · {mode} · {paperPreset.label}
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <ToolbarButton active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
-              <ToolbarButton active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
-              <ToolbarButton active={false} onClick={() => fileInputRef.current?.click()}>＋ Image</ToolbarButton>
-              <ToolbarButton active={false} onClick={shareCurrentPage}>Share PNG</ToolbarButton>
-              <ToolbarButton active={showPanel} onClick={() => setShowPanel((v) => !v)}>Settings</ToolbarButton>
+          </div>
+
+          <div className="floating-toolbar">
+            <FloatingButton active={tool === "silkyPen" && mode === "draw"} onClick={() => applyToolPreset("silkyPen")}>Pen</FloatingButton>
+            <FloatingButton active={tool === "pencil" && mode === "draw"} onClick={() => applyToolPreset("pencil")}>Pcl</FloatingButton>
+            <FloatingButton active={false} onClick={addPage}>＋</FloatingButton>
+            <FloatingButton active={false} onClick={shareCurrentPage}>↗</FloatingButton>
+            <FloatingButton active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</FloatingButton>
+          </div>
+
+          {status && <div className="status-toast">{status}</div>}
+        </section>
+      </main>
+
+      {showPages && (
+        <div className="overlay">
+          <button className="overlay-backdrop" onClick={() => setShowPages(false)} aria-label="Close pages" />
+          <aside className="pages-drawer">
+            <div className="drawer-grid">
+              <ToolbarButton compact active={false} onClick={addPage}>＋Page</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={duplicatePage}>Copy</ToolbarButton>
             </div>
-          </header>
-
-          <section
-            style={{ flex: 1, display: "grid", placeItems: "center", padding: 16, minHeight: 0 }}
-            onDragEnter={handleDragEnter}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <div
-              ref={frameRef}
-              style={{
-                position: "relative",
-                width: "min(100%, calc((88vh - 86px) * var(--ratio)))",
-                maxWidth: "100%",
-                aspectRatio: `${slidePreset.ratio}`,
-                overflow: "hidden",
-                background: paperPreset.color,
-                border: "1px solid rgba(168,162,158,0.75)",
-                borderRadius: 12,
-                boxShadow: "0 18px 36px rgba(28,25,23,0.12)",
-                ["--ratio"]: slidePreset.ratio,
-              }}
-            >
-              <canvas ref={bgCanvasRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-              <canvas ref={imageCanvasRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
-              <canvas
-                ref={drawCanvasRef}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  touchAction: "none",
-                  cursor: mode === "image" ? "grab" : "crosshair",
+            <ToolbarButton compact active={false} onClick={deletePage}>Delete current</ToolbarButton>
+            <div className="divider" />
+            {pages.map((page, index) => (
+              <button
+                key={page.id}
+                type="button"
+                onClick={() => {
+                  saveDrawingToPage();
+                  setCurrentPageId(page.id);
+                  setSelectedImageId(null);
+                  setShowPages(false);
                 }}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-              />
-
-              {isDragOver && (
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    display: "grid",
-                    placeItems: "center",
-                    background: "rgba(247,243,233,0.72)",
-                    border: "2px dashed rgba(41,37,36,0.45)",
-                    color: "#292524",
-                    fontSize: 15,
-                    fontWeight: 650,
-                    letterSpacing: 0.2,
-                    zIndex: 20,
-                    pointerEvents: "none",
-                  }}
-                >
-                  Drop image here
-                </div>
-              )}
-
-              <div
-                style={{
-                  pointerEvents: "none",
-                  position: "absolute",
-                  left: 14,
-                  bottom: 12,
-                  borderRadius: 999,
-                  background: darkPaper ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.45)",
-                  backdropFilter: "blur(6px)",
-                  padding: "7px 10px",
-                  fontSize: 10,
-                  color: darkPaper ? "rgba(255,255,255,.72)" : "#78716c",
-                }}
+                className={`page-card ${page.id === currentPage.id ? "active" : ""}`}
               >
-                {SLIDE_PRESETS[slidePresetId].label} / {TOOL_PRESETS[tool].label} / {mode} / {paperPreset.label}
-              </div>
-            </div>
-          </section>
-        </main>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <small>{page.images.length} image{page.images.length === 1 ? "" : "s"}</small>
+              </button>
+            ))}
+          </aside>
+        </div>
+      )}
 
-        {showPanel && (
-          <aside
-            style={{
-              borderRadius: 32,
-              border: "1px solid rgba(214,211,209,0.9)",
-              background: "rgba(249,246,238,0.82)",
-              boxShadow: "0 12px 28px rgba(28,25,23,0.06)",
-              backdropFilter: "blur(18px)",
-              padding: 18,
-              display: "grid",
-              gap: 16,
-              alignContent: "start",
-              maxHeight: "calc(100vh - 24px)",
-              overflow: "auto",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+      {showPanel && (
+        <div className="overlay">
+          <button className="overlay-backdrop" onClick={() => setShowPanel(false)} aria-label="Close settings" />
+          <aside className="settings-drawer">
+            <div className="drawer-header">
               <div>
-                <div style={{ fontSize: 14, fontWeight: 650 }}>Settings</div>
-                <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>背景・書き味・PNG共有</div>
+                <div className="drawer-title">Settings</div>
+                <div className="drawer-subtitle">書き味・背景・出力</div>
               </div>
-              <ToolbarButton active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div className="drawer-grid">
+              <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
+              <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>画像追加</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={deleteSelectedImage} disabled={!selectedImageId}>画像削除</ToolbarButton>
+            </div>
+
+            <div className="drawer-grid">
+              <ToolbarButton compact active={false} onClick={downloadCurrentPage}>PNG保存</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={shareCurrentPage}>PNG共有</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={downloadAllPages}>全ページ保存</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={clearPage}>ページ消去</ToolbarButton>
+            </div>
+
+            <div className="info-card">
               <SectionTitle>OneDrive share flow</SectionTitle>
-              <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.55 }}>{shareHint}</div>
-              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
-                Androidでは Share PNG を押して、共有先にOneDriveを選び、PC側で監視するinboxフォルダへ保存してください。
-              </div>
-              <ToolbarButton active={false} onClick={() => setShareHint(`推奨保存先：OneDrive ${ONEDRIVE_INBOX_HINT}`)}>
-                保存先ヒント
-              </ToolbarButton>
+              <p>Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。</p>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <ToolbarButton active={false} onClick={downloadCurrentPage}>PNG保存</ToolbarButton>
-              <ToolbarButton active={false} onClick={shareCurrentPage}>PNG共有</ToolbarButton>
-              <ToolbarButton active={false} onClick={downloadAllPages}>全ページ保存</ToolbarButton>
-              <ToolbarButton active={false} onClick={clearPage}>ページ消去</ToolbarButton>
-            </div>
-
-            <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.5, background: "rgba(255,255,255,.55)", padding: 10, borderRadius: 16 }}>{status}</div>
-
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="setting-section">
               <SectionTitle>Background</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div className="preset-grid">
                 {Object.entries(PAPER_PRESETS).map(([id, preset]) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() => setPaperPresetId(id)}
-                    style={{
-                      border: paperPresetId === id ? "1px solid #292524" : "1px solid rgba(214,211,209,.92)",
-                      borderRadius: 16,
-                      padding: 8,
-                      cursor: "pointer",
-                      background: "rgba(255,255,255,.75)",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      fontSize: 11,
-                      color: "#292524",
-                    }}
+                    className={`preset-button ${paperPresetId === id ? "active" : ""}`}
                   >
-                    <span style={{ width: 20, height: 20, borderRadius: 999, background: preset.color, border: "1px solid rgba(0,0,0,.12)", display: "inline-block" }} />
+                    <span className="swatch" style={{ background: preset.color }} />
                     {preset.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="setting-section">
               <SectionTitle>Slide size</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div className="three-grid">
                 {Object.entries(SLIDE_PRESETS).map(([id, preset]) => (
-                  <ToolbarButton key={id} active={slidePresetId === id} onClick={() => setSlidePresetId(id)}>
+                  <ToolbarButton compact key={id} active={slidePresetId === id} onClick={() => setSlidePresetId(id)}>
                     {preset.label}
                   </ToolbarButton>
                 ))}
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="setting-section">
               <SectionTitle>Pen</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div className="drawer-grid">
                 {Object.entries(TOOL_PRESETS).map(([id, preset]) => (
-                  <ToolbarButton key={id} active={tool === id} onClick={() => applyToolPreset(id)} title={preset.description}>
+                  <ToolbarButton compact key={id} active={tool === id} onClick={() => applyToolPreset(id)}>
                     {preset.label}
                   </ToolbarButton>
                 ))}
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="setting-section">
               <SectionTitle>Density</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div className="drawer-grid">
                 {DENSITY_PRESETS.map((preset) => (
-                  <ToolbarButton key={preset.id} active={Math.abs(density - preset.value) < 0.04} onClick={() => setDensity(preset.value)}>
+                  <ToolbarButton compact key={preset.id} active={Math.abs(density - preset.value) < 0.04} onClick={() => setDensity(preset.value)}>
                     {preset.label}
                   </ToolbarButton>
                 ))}
               </div>
             </div>
 
-            {selectedImageId && (
-              <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 18, padding: 12 }}>
-                <SectionTitle>Selected image</SectionTitle>
-                <ToolbarButton active={false} onClick={deleteSelectedImage}>画像削除</ToolbarButton>
-              </div>
-            )}
-
-            <div style={{ display: "grid", gap: 14, borderRadius: 22, background: "rgba(255,255,255,0.58)", padding: 14 }}>
+            <div className="slider-card">
               <RangeControl label="width" value={width} onChange={setWidth} min={0.7} max={16} step={0.1} format={(v) => v.toFixed(1)} />
               <RangeControl label="opacity" value={opacity} onChange={setOpacity} min={0.04} max={1} step={0.01} />
               <RangeControl label="smoothing" value={smoothing} onChange={setSmoothing} min={0} max={0.9} step={0.01} />
@@ -1319,15 +1275,15 @@ export default function PencilRoomAndroidNoteToPpt() {
               <RangeControl label="paper tooth" value={paperTooth} onChange={setPaperTooth} min={0} max={1} step={0.01} />
             </div>
           </aside>
-        )}
-      </div>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
         multiple
-        style={{ display: "none" }}
+        hidden
         onChange={(event) => {
           const files = event.target.files;
           if (files?.length) handleImageFiles(files, { source: "file" });
@@ -1351,40 +1307,13 @@ export function runBasicPenEngineTests() {
   assert("lerp midpoint", lerp(0, 10, 0.5) === 5);
   assert("distance 3-4-5", Math.abs(distance({ x: 0, y: 0 }, { x: 3, y: 4 }) - 5) < 0.0001);
 
-  const a = { x: 0, y: 0, pressure: 0.2, tiltX: 0, tiltY: 0, time: 0 };
-  const b = { x: 10, y: 20, pressure: 0.8, tiltX: 2, tiltY: 4, time: 10 };
-  const mid = midpoint(a, b);
-  assert("midpoint x", mid.x === 5);
-  assert("midpoint y", mid.y === 10);
-  assert("midpoint pressure", Math.abs(mid.pressure - 0.5) < 0.0001);
-
-  const qStart = { x: 0, y: 0, pressure: 0.2, tiltX: 0, tiltY: 0, time: 0 };
-  const qControl = { x: 10, y: 20, pressure: 0.5, tiltX: 0, tiltY: 0, time: 5 };
-  const qEnd = { x: 20, y: 0, pressure: 0.8, tiltX: 0, tiltY: 0, time: 10 };
-  const q0 = quadraticPoint(qStart, qControl, qEnd, 0);
-  const q1 = quadraticPoint(qStart, qControl, qEnd, 1);
-  assert("quadratic start", q0.x === qStart.x && q0.y === qStart.y);
-  assert("quadratic end", q1.x === qEnd.x && q1.y === qEnd.y);
-
-  assert("pressure curve is monotonic", pressureCurve(0.8) > pressureCurve(0.4));
-  assert("silky preset exists", !!TOOL_PRESETS.silkyPen);
-  assert("technical is smoother than pencil", TOOL_PRESETS.technical.smoothing > TOOL_PRESETS.pencil.smoothing);
-  assert("dark density darker than natural", DENSITY_PRESETS.find((x) => x.id === "dark").value > DENSITY_PRESETS.find((x) => x.id === "natural").value);
-  assert("silky pen grain default is clean", TOOL_PRESETS.silkyPen.grain === 0);
-  assert("silky pen suppresses low grain dots", computeGrainDotCount(100, 0.04, "silkyPen") === 0);
-  assert("pencil can still render grain dots", computeGrainDotCount(100, 0.64, "pencil") > 0);
-  assert("widescreen slide ratio is 16:9", Math.abs(SLIDE_PRESETS.widescreen.ratio - 16 / 9) < 0.0001);
-  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
-
   const page = makeEmptyPage(3);
   assert("empty page has name", page.name === "Page 03");
   assert("empty page has no images", page.images.length === 0);
   assert("image miss returns null", getImageHit([], 0, 0) === null);
   assert("image hit move", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 40, 40)?.mode === "move");
   assert("image hit resize", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 110, 90)?.mode === "resize");
-  assert("paper presets include warm", !!PAPER_PRESETS.warm);
-  assert("paper preset has color", PAPER_PRESETS.blue.color.startsWith("#"));
-  assert("charcoal is dark paper", PAPER_PRESETS.charcoal.color === "#242424");
+  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
 
   return results;

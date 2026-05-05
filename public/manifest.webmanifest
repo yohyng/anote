@@ -1,0 +1,25 @@
+{
+  "name": "Pencil Room",
+  "short_name": "Pencil Room",
+  "description": "Galaxy Z Fold向けの手書きスライドノートアプリ",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#e8e3d8",
+  "theme_color": "#e8e3d8",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

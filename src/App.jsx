@@ -1,18 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v2
+ * Pencil Room / Galaxy Z Fold PWA v3
  * Self-contained React component. No external UI/icon libraries.
  *
  * Main flow:
  * - Write with S Pen or one finger
  * - Two-finger pinch zoom/pan for viewing the canvas
+ * - Eraser mode
+ * - Input mode switching: pen+finger / pen only / finger only
+ * - S Pen pressure floor/gain calibration
+ * - Clipboard image paste button
  * - Pinch gestures never draw accidental strokes
  * - Paste / drag-drop / file-select images into a slide-sized canvas
  * - Share PNG from Android share sheet and save it to OneDrive/PencilRoom/inbox
  * - Optional PWA Share Target: Samsung AI Select / Smart Select can share an image into this app
  */
 
+const APP_VERSION = "v3.0.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -74,6 +79,16 @@ const TOOL_PRESETS = {
     velocity: 0.1,
     grain: 0,
   },
+  eraser: {
+    label: "Eraser",
+    description: "手書き線だけを消す消しゴム",
+    width: 14,
+    opacity: 1,
+    smoothing: 0.42,
+    pressure: 0.15,
+    velocity: 0,
+    grain: 0,
+  },
 };
 
 const DENSITY_PRESETS = [
@@ -82,6 +97,12 @@ const DENSITY_PRESETS = [
   { id: "dark", label: "濃い", value: 1.45 },
   { id: "veryDark", label: "かなり濃い", value: 2.05 },
 ];
+
+const INPUT_MODE_PRESETS = {
+  penAndFinger: { label: "Pen + Finger", description: "S Pen と一本指の両方で描画" },
+  penOnly: { label: "Pen only", description: "S Penだけで描画。指はピンチズーム用" },
+  fingerOnly: { label: "Finger only", description: "一本指だけで描画。S Penは無視" },
+};
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -173,9 +194,21 @@ function drawPaperTexture(ctx, width, height, paperTooth, grainDots, paperPreset
   ctx.restore();
 }
 
-function getPointFromEvent(event, canvas) {
+function normalizePointerPressure(event, calibration = {}) {
+  const raw = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "pen" ? 0.08 : 0.48;
+  const floor = calibration.pressureFloor ?? 0.22;
+  const gain = calibration.pressureGain ?? 1.9;
+
+  if (event.pointerType === "pen") {
+    return clamp(floor + raw * gain, 0.06, 1);
+  }
+
+  return clamp(raw, 0.06, 1);
+}
+
+function getPointFromEvent(event, canvas, calibration = {}) {
   const rect = canvas.getBoundingClientRect();
-  const pressure = event.pressure && event.pressure > 0 ? event.pressure : 0.48;
+  const pressure = normalizePointerPressure(event, calibration);
 
   // The frame is visually transformed during pinch zoom.
   // getBoundingClientRect() returns the transformed size.
@@ -192,6 +225,7 @@ function getPointFromEvent(event, canvas) {
     pressure,
     tiltX: event.tiltX || 0,
     tiltY: event.tiltY || 0,
+    pointerType: event.pointerType || "unknown",
     time: performance.now(),
   };
 }
@@ -225,7 +259,7 @@ function computeStrokeStyle(from, to, settings, tool) {
 
   const pressureAlpha = 0.68 + pressureValue * 0.42 * settings.pressure;
   const velocityAlpha = 1 - settings.velocity * speed * 0.28;
-  const toolBoost = tool === "pencil" ? 1.25 : tool === "technical" ? 1.05 : 1;
+  const toolBoost = tool === "pencil" ? 1.12 : tool === "technical" ? 1.05 : 1;
   const alpha = settings.opacity * settings.density * pressureAlpha * velocityAlpha * toolBoost;
 
   return { width, alpha, speed };
@@ -301,6 +335,10 @@ function drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool) {
 
 function drawInitialCurveSegment(ctx, p0, p1, settings, tool) {
   const end = midpoint(p0, p1);
+  if (tool === "eraser") {
+    drawEraserSegment(ctx, p0, end, settings);
+    return;
+  }
   if (tool === "pencil") {
     drawGraphiteSegment(ctx, p0, end, settings);
     return;
@@ -311,6 +349,10 @@ function drawInitialCurveSegment(ctx, p0, p1, settings, tool) {
 
 function drawTailCurveSegment(ctx, p0, p1, settings, tool) {
   const start = midpoint(p0, p1);
+  if (tool === "eraser") {
+    drawEraserSegment(ctx, start, p1, settings);
+    return;
+  }
   if (tool === "pencil") {
     drawGraphiteSegment(ctx, start, p1, settings);
     return;
@@ -322,13 +364,25 @@ function drawTailCurveSegment(ctx, p0, p1, settings, tool) {
 function drawTapDot(ctx, point, settings, tool) {
   const fakeNext = { ...point, x: point.x + 0.01, y: point.y + 0.01, time: point.time + 1 };
   const style = computeStrokeStyle(point, fakeNext, settings, tool);
-  const radius = tool === "marker" ? style.width * 0.34 : tool === "pencil" ? style.width * 0.18 : style.width * 0.2;
+
+  if (tool === "eraser") {
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, Math.max(6, style.width * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  const radius = tool === "marker" ? style.width * 0.34 : tool === "pencil" ? style.width * 0.13 : style.width * 0.18;
 
   ctx.save();
   ctx.globalCompositeOperation = tool === "marker" ? "multiply" : "source-over";
-  ctx.fillStyle = rgba(INK_COLOR, style.alpha * 0.78);
+  ctx.fillStyle = rgba(INK_COLOR, style.alpha * 0.55);
   ctx.beginPath();
-  ctx.arc(point.x, point.y, Math.max(0.28, radius), 0, Math.PI * 2);
+  ctx.arc(point.x, point.y, Math.max(0.22, radius), 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -352,8 +406,8 @@ function drawGraphiteSegment(ctx, from, to, settings) {
     const forward = (Math.random() - 0.5) * style.width * 0.25;
     const px = x + Math.cos(angle + Math.PI / 2) * side + Math.cos(angle) * forward;
     const py = y + Math.sin(angle + Math.PI / 2) * side + Math.sin(angle) * forward;
-    const r = style.width * (0.22 + Math.random() * 0.36);
-    const alpha = clamp(style.alpha * (0.06 + Math.random() * 0.14), 0.01, 0.68);
+    const r = style.width * (0.18 + Math.random() * 0.24);
+    const alpha = clamp(style.alpha * (0.035 + Math.random() * 0.075), 0.006, 0.38);
 
     ctx.fillStyle = rgba(INK_COLOR, alpha);
     ctx.beginPath();
@@ -376,6 +430,39 @@ function drawGraphiteCurveSegment(ctx, p0, p1, p2, settings) {
     drawGraphiteSegment(ctx, previous, point, settings);
     previous = point;
   }
+}
+
+function drawEraserCurveSegment(ctx, p0, p1, p2, settings) {
+  const start = midpoint(p0, p1);
+  const end = midpoint(p1, p2);
+  const style = computeStrokeStyle(start, end, { ...settings, opacity: 1, density: 1, grain: 0 }, "eraser");
+
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(0,0,0,1)";
+  ctx.lineWidth = Math.max(6, style.width);
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.quadraticCurveTo(p1.x, p1.y, end.x, end.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEraserSegment(ctx, from, to, settings) {
+  const style = computeStrokeStyle(from, to, { ...settings, opacity: 1, density: 1, grain: 0 }, "eraser");
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(0,0,0,1)";
+  ctx.lineWidth = Math.max(6, style.width);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawImagesToCanvas(ctx, images, selectedImageId, showSelection = true) {
@@ -468,6 +555,12 @@ function getNextViewportForPinch(startViewport, startMid, currentMid, startDista
 
 function shouldBeginPinch(activePointerCount) {
   return activePointerCount >= 2;
+}
+
+function isPointerAllowedForDrawing(pointerType, inputMode) {
+  if (inputMode === "penOnly") return pointerType === "pen";
+  if (inputMode === "fingerOnly") return pointerType === "touch" || pointerType === "mouse";
+  return pointerType === "pen" || pointerType === "touch" || pointerType === "mouse";
 }
 
 function ToolbarButton({ active, onClick, children, title, disabled, compact = false }) {
@@ -569,6 +662,9 @@ export default function PencilRoomZFoldPinchPWA() {
   const [grain, setGrain] = useState(TOOL_PRESETS.silkyPen.grain);
   const [density, setDensity] = useState(1.0);
   const [paperTooth, setPaperTooth] = useState(0.72);
+  const [inputMode, setInputMode] = useState("penAndFinger");
+  const [pressureFloor, setPressureFloor] = useState(0.24);
+  const [pressureGain, setPressureGain] = useState(2.2);
   const [paperPresetId, setPaperPresetId] = useState("warm");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
   const [showPages, setShowPages] = useState(false);
@@ -586,6 +682,11 @@ export default function PencilRoomZFoldPinchPWA() {
   const settings = useMemo(
     () => ({ width, opacity, smoothing, pressure, velocity, grain, density }),
     [width, opacity, smoothing, pressure, velocity, grain, density]
+  );
+
+  const pressureCalibration = useMemo(
+    () => ({ pressureFloor, pressureGain }),
+    [pressureFloor, pressureGain]
   );
 
   const appBackground = useMemo(
@@ -796,7 +897,8 @@ export default function PencilRoomZFoldPinchPWA() {
     const canvas = drawCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    if (tool === "pencil") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings);
+    if (tool === "eraser") drawEraserCurveSegment(ctx, p0, p1, p2, settings);
+    else if (tool === "pencil") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings);
     else drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool);
   }
 
@@ -820,9 +922,14 @@ export default function PencilRoomZFoldPinchPWA() {
       return;
     }
 
+    if (mode === "draw" && !isPointerAllowedForDrawing(event.pointerType || "mouse", inputMode)) {
+      setStatus(`${INPUT_MODE_PRESETS[inputMode].label}：この入力では描画しません。二本指ピンチは使えます。`);
+      return;
+    }
+
     activeDrawingPointerIdRef.current = event.pointerId;
     canvas.setPointerCapture?.(event.pointerId);
-    const raw = getPointFromEvent(event, canvas);
+    const raw = getPointFromEvent(event, canvas, pressureCalibration);
 
     if (mode === "image") {
       const hit = getImageHit(currentPage.images, raw.x, raw.y);
@@ -877,7 +984,7 @@ export default function PencilRoomZFoldPinchPWA() {
     }
 
     if (activeDrawingPointerIdRef.current !== event.pointerId) return;
-    const raw = getPointFromEvent(event, canvas);
+    const raw = getPointFromEvent(event, canvas, pressureCalibration);
 
     if (mode === "image" && imageInteractionRef.current) {
       const { imageId, mode: hitMode, startX, startY, original } = imageInteractionRef.current;
@@ -901,7 +1008,7 @@ export default function PencilRoomZFoldPinchPWA() {
 
     const nativeEvents = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
     for (const nativeEvent of nativeEvents) {
-      const nextRaw = getPointFromEvent(nativeEvent, canvas);
+      const nextRaw = getPointFromEvent(nativeEvent, canvas, pressureCalibration);
       const rawSpeed = lastRawPointRef.current ? speedBetween(lastRawPointRef.current, nextRaw) : 0;
       const dynamicSmoothing = clamp(smoothing - rawSpeed * 0.08, 0.03, 0.9);
       const smooth = smoothPoint(lastPointRef.current, nextRaw, dynamicSmoothing);
@@ -1059,8 +1166,31 @@ export default function PencilRoomZFoldPinchPWA() {
     setSelectedImageId(imageRecord.id);
     setMode("image");
     redrawImages(nextImages, imageRecord.id);
-    const sourceLabel = source === "paste" ? "クリップボード" : source === "drop" ? "ドロップ" : source === "share-target" ? "共有" : "画像";
+    const sourceLabel = source === "paste" || source === "pasteButton" ? "クリップボード" : source === "drop" ? "ドロップ" : source === "share-target" ? "共有" : "画像";
     setStatus(`${sourceLabel}から画像を貼り込みました。Imageモードで移動・リサイズできます。`);
+  }
+
+
+  async function pasteImageFromClipboard() {
+    if (!navigator.clipboard?.read) {
+      setStatus("このブラウザではボタンからの画像貼り付けに未対応です。Ctrl+V / 長押し貼り付け / 共有を使ってください。");
+      return;
+    }
+
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        const file = new File([blob], `clipboard-${Date.now()}.png`, { type: imageType });
+        handleImageFile(file, { source: "pasteButton" });
+        return;
+      }
+      setStatus("クリップボードに画像が見つかりませんでした。");
+    } catch (error) {
+      setStatus("クリップボード画像を読み取れませんでした。Androidでは権限やブラウザ制限で失敗することがあります。");
+    }
   }
 
   function handleImageFile(file, options = {}) {
@@ -1223,8 +1353,8 @@ export default function PencilRoomZFoldPinchPWA() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>Pages</ToolbarButton>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Pencil Room</div>
-              <div style={{ fontSize: 10, color: "#78716c" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label} · {Math.round(viewport.scale * 100)}%</div>
+              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Pencil Room <span style={{ fontSize: 10, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
+              <div style={{ fontSize: 10, color: "#78716c" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
             </div>
           </div>
 
@@ -1232,6 +1362,7 @@ export default function PencilRoomZFoldPinchPWA() {
             <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
             <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>＋Img</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>Paste</ToolbarButton>
             <ToolbarButton compact active={false} onClick={shareCurrentPage}>Share</ToolbarButton>
             <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
           </div>
@@ -1299,18 +1430,19 @@ export default function PencilRoomZFoldPinchPWA() {
                 borderRadius: 999,
                 background: darkPaper ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.46)",
                 backdropFilter: "blur(6px)",
-                padding: "6px 9px",
-                fontSize: 10,
+                padding: "4px 7px",
+                fontSize: 9,
                 color: darkPaper ? "rgba(255,255,255,.72)" : "#78716c",
               }}
             >
-              {TOOL_PRESETS[tool].label} · {mode} · zoom {Math.round(viewport.scale * 100)}%
+{TOOL_PRESETS[tool].label} · {mode} · {Math.round(viewport.scale * 100)}%
             </div>
           </div>
 
           <div style={{ position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", display: "flex", gap: 8, padding: 6, borderRadius: 999, background: "rgba(249,246,238,.64)", border: "1px solid rgba(214,211,209,.72)", boxShadow: "0 14px 32px rgba(28,25,23,.13)", backdropFilter: "blur(18px)", zIndex: 14 }}>
             <FloatingButton active={tool === "silkyPen" && mode === "draw"} onClick={() => applyToolPreset("silkyPen")}>Pen</FloatingButton>
             <FloatingButton active={tool === "pencil" && mode === "draw"} onClick={() => applyToolPreset("pencil")}>Pcl</FloatingButton>
+            <FloatingButton active={tool === "eraser" && mode === "draw"} onClick={() => applyToolPreset("eraser")}>消</FloatingButton>
             <FloatingButton active={false} onClick={addPage}>＋</FloatingButton>
             <FloatingButton active={false} onClick={resetZoom}>100</FloatingButton>
             <FloatingButton active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</FloatingButton>
@@ -1371,7 +1503,7 @@ export default function PencilRoomZFoldPinchPWA() {
           <aside style={{ position: "absolute", right: 10, top: 64, bottom: 12, width: "min(360px, calc(100vw - 24px))", borderRadius: 28, border: "1px solid rgba(214,211,209,0.9)", background: "rgba(249,246,238,0.88)", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", backdropFilter: "blur(20px)", padding: 16, display: "grid", gap: 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 650 }}>Settings</div>
+                <div style={{ fontSize: 14, fontWeight: 650 }}>Settings <span style={{ fontSize: 11, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
                 <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>書き味・背景・出力・ズーム</div>
               </div>
               <ToolbarButton compact active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
@@ -1381,6 +1513,7 @@ export default function PencilRoomZFoldPinchPWA() {
               <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
               <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
               <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>画像追加</ToolbarButton>
+              <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>貼り付け</ToolbarButton>
               <ToolbarButton compact active={false} onClick={deleteSelectedImage} disabled={!selectedImageId}>画像削除</ToolbarButton>
             </div>
 
@@ -1454,6 +1587,17 @@ export default function PencilRoomZFoldPinchPWA() {
             </div>
 
             <div style={{ display: "grid", gap: 8 }}>
+              <SectionTitle>Input</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
+                {Object.entries(INPUT_MODE_PRESETS).map(([id, preset]) => (
+                  <ToolbarButton compact key={id} active={inputMode === id} onClick={() => setInputMode(id)} title={preset.description}>
+                    {preset.label}
+                  </ToolbarButton>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Pen</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {Object.entries(TOOL_PRESETS).map(([id, preset]) => (
@@ -1479,7 +1623,9 @@ export default function PencilRoomZFoldPinchPWA() {
               <RangeControl label="width" value={width} onChange={setWidth} min={0.7} max={16} step={0.1} format={(v) => v.toFixed(1)} />
               <RangeControl label="opacity" value={opacity} onChange={setOpacity} min={0.04} max={1} step={0.01} />
               <RangeControl label="smoothing" value={smoothing} onChange={setSmoothing} min={0} max={0.9} step={0.01} />
-              <RangeControl label="pressure" value={pressure} onChange={setPressure} min={0} max={1.4} step={0.01} />
+              <RangeControl label="pressure response" value={pressure} onChange={setPressure} min={0} max={1.4} step={0.01} />
+              <RangeControl label="S Pen pressure floor" value={pressureFloor} onChange={setPressureFloor} min={0.02} max={0.55} step={0.01} />
+              <RangeControl label="S Pen pressure gain" value={pressureGain} onChange={setPressureGain} min={0.6} max={4} step={0.05} format={(v) => v.toFixed(2)} />
               <RangeControl label="velocity" value={velocity} onChange={setVelocity} min={0} max={1} step={0.01} />
               <RangeControl label="grain" value={grain} onChange={setGrain} min={0} max={1} step={0.01} />
               <RangeControl label="paper tooth" value={paperTooth} onChange={setPaperTooth} min={0} max={1} step={0.01} />
@@ -1553,6 +1699,10 @@ export function runBasicPenEngineTests() {
   assert("charcoal is dark paper", PAPER_PRESETS.charcoal.color === "#242424");
   assert("two pointers begin pinch", shouldBeginPinch(2) === true);
   assert("one pointer does not begin pinch", shouldBeginPinch(1) === false);
+  assert("pen only allows pen", isPointerAllowedForDrawing("pen", "penOnly") === true);
+  assert("pen only rejects touch drawing", isPointerAllowedForDrawing("touch", "penOnly") === false);
+  assert("finger only allows touch", isPointerAllowedForDrawing("touch", "fingerOnly") === true);
+  assert("pen pressure floor helps light strokes", normalizePointerPressure({ pointerType: "pen", pressure: 0.02 }, { pressureFloor: 0.24, pressureGain: 2.2 }) > 0.25);
   const pinchViewport = getNextViewportForPinch({ scale: 1, x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 20 }, 100, 200);
   assert("pinch doubles scale", Math.abs(pinchViewport.scale - 2) < 0.0001);
   assert("pinch pans by midpoint delta", pinchViewport.x === 10 && pinchViewport.y === 20);
@@ -1576,6 +1726,8 @@ export const __testables = {
   getClientDistance,
   getNextViewportForPinch,
   shouldBeginPinch,
+  isPointerAllowedForDrawing,
+  normalizePointerPressure,
   makeEmptyPage,
   PAPER_PRESETS,
   SLIDE_PRESETS,

@@ -1,6 +1,6 @@
 {
-  "name": "pencil-room-zfold-pinch-pwa",
-  "version": "0.2.0",
+  "name": "pencil-room-zfold-pinch-pwa-v3",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {

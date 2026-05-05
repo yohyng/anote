@@ -1,0 +1,10 @@
+Pencil Room v3.0.0
+
+Updates:
+- Visible app version
+- Eraser mode
+- Pen/Finger input mode switching
+- S Pen pressure floor/gain calibration
+- Clipboard image paste button
+- Smaller zoom/status badge
+- Reduced black-dot artifacts

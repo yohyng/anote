@@ -1,11 +1,11 @@
-# Pencil Room / Z Fold Pinch PWA v2
+# Pencil Room / Z Fold Pinch PWA v3
 
 Galaxy Z Fold 5 の見開き・分割画面利用を想定した、手書きノート + スライドPNG書き出し用PWAです。
 
 ## 入っているもの
 
 ```txt
-pencil-room-zfold-pinch-pwa-v2/
+pencil-room-zfold-pinch-pwa-v3/
   index.html
   package.json
   vite.config.js
@@ -103,3 +103,19 @@ python pc-tools/watch_onedrive_to_ppt.py ^
 注意:
 - PowerPointを開いたままだとPPTX保存に失敗することがあります。
 - 複雑な既存テンプレートを完全保持したい場合は、PowerPoint COM版にするほうが安定します。
+
+
+## v3.0.0 updates
+
+- Visible version display in the app header and Settings panel.
+- Added Eraser mode. It erases handwriting strokes only; paper background and imported images remain.
+- Added input mode switching:
+  - Pen + Finger
+  - Pen only
+  - Finger only
+- Added S Pen pressure calibration:
+  - S Pen pressure floor
+  - S Pen pressure gain
+- Added Paste button for clipboard images.
+- Reduced zoom/status badge size.
+- Reduced black-dot artifacts by lowering graphite particle alpha and avoiding overly dark tap/vertex rendering.

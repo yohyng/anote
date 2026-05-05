@@ -1,12 +1,9 @@
-Pencil Room v4.0.0
+Pencil Room v5.0.0
 
-Drawing UX update:
-- Per-tool saved settings
-- Area eraser
-- Stroke eraser
-- Stroke model
-- Undo / Redo
-- Tool rail UI
-- S Pen pressure floor/gain
-- Clipboard image paste
-- Share PNG to OneDrive flow
+Low-latency drawing update:
+- Incremental live drawing
+- Turbo / Rich live quality
+- More sensitive S Pen pressure response
+- Added light-touch pressure curve
+- Reduced smoothing default for quicker handwriting
+- Keeps v4 tool rail, eraser, image import, PWA, and Share PNG → OneDrive workflow

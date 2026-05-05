@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v4
+ * Pencil Room / Galaxy Z Fold PWA v5
  * Self-contained React component. No external UI/icon libraries.
  *
- * v4 drawing UX:
+ * v5 drawing UX / performance:
+ * - Low-latency live ink path inspired by Concepts-style drawing feel
+ * - Direct incremental drawing while writing; rich redraw only after stroke commit
+ * - More sensitive S Pen pressure calibration
  * - Standard note-app-like tool rail
  * - Per-tool saved settings
  * - Eraser supports area erase and stroke erase
@@ -16,7 +19,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v4.0.0";
+const APP_VERSION = "v5.0.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -43,12 +46,12 @@ const DEFAULT_TOOL_CONFIGS = {
     kind: "ink",
     icon: "✎",
     label: "Silky",
-    description: "なめらかで補正が効いた標準ペン",
-    width: 3.2,
-    opacity: 0.88,
-    smoothing: 0.58,
-    pressure: 0.55,
-    velocity: 0.2,
+    description: "軽く触れても出る、低遅延の標準ペン",
+    width: 3.0,
+    opacity: 0.9,
+    smoothing: 0.22,
+    pressure: 0.62,
+    velocity: 0.12,
     grain: 0,
     density: 1,
   },
@@ -71,10 +74,10 @@ const DEFAULT_TOOL_CONFIGS = {
     kind: "ink",
     icon: "─",
     label: "Clean",
-    description: "均質な製図ペン",
+    description: "均質で読みやすい製図ペン",
     width: 2.2,
     opacity: 0.94,
-    smoothing: 0.76,
+    smoothing: 0.48,
     pressure: 0.18,
     velocity: 0.05,
     grain: 0,
@@ -266,12 +269,15 @@ function drawPaperTexture(ctx, width, height, paperTooth, grainDots, paperPreset
 }
 
 function normalizePointerPressure(event, calibration = {}) {
-  const raw = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "pen" ? 0.08 : 0.48;
-  const floor = calibration.pressureFloor ?? 0.24;
-  const gain = calibration.pressureGain ?? 2.2;
+  const raw = event.pressure && event.pressure > 0 ? event.pressure : event.pointerType === "pen" ? 0.1 : 0.48;
+  const floor = calibration.pressureFloor ?? 0.34;
+  const gain = calibration.pressureGain ?? 2.9;
+  const gamma = calibration.pressureGamma ?? 0.55;
 
   if (event.pointerType === "pen") {
-    return clamp(floor + raw * gain, 0.06, 1);
+    // gamma < 1 lifts very light pressure, similar to a sensitive note-taking pen.
+    const shaped = Math.pow(clamp(raw, 0, 1), gamma);
+    return clamp(floor + shaped * gain, 0.05, 1);
   }
 
   return clamp(raw, 0.06, 1);
@@ -535,6 +541,40 @@ function drawStroke(ctx, stroke) {
   }
 }
 
+function drawIncrementalStrokeSegment(ctx, stroke, liveQuality = "turbo") {
+  if (!stroke || !Array.isArray(stroke.points) || stroke.points.length < 2) return;
+  const points = stroke.points;
+  const settings = stroke.settings || DEFAULT_TOOL_CONFIGS.silkyPen;
+  const kind = stroke.kind || settings.kind || "ink";
+  const len = points.length;
+  const seedBase = hashString(stroke.id || "live-stroke");
+
+  if (len === 2) {
+    const p0 = points[0];
+    const p1 = points[1];
+    if (kind === "eraser") drawEraserSegment(ctx, p0, p1, settings);
+    else if (kind === "pencil" && liveQuality === "rich") drawGraphiteSegment(ctx, p0, p1, settings, seedBase);
+    else {
+      const liveKind = kind === "pencil" ? "ink" : kind;
+      strokePath(ctx, p0, p0, p1, computeStrokeStyle(p0, p1, settings, liveKind), liveKind, liveKind !== "ink");
+    }
+    return;
+  }
+
+  const p0 = points[len - 3];
+  const p1 = points[len - 2];
+  const p2 = points[len - 1];
+
+  if (kind === "eraser") drawEraserCurveSegment(ctx, p0, p1, p2, settings);
+  else if (kind === "pencil" && liveQuality === "rich") drawGraphiteCurveSegment(ctx, p0, p1, p2, settings, seedBase + len * 1031);
+  else {
+    // Turbo mode: draw a light smooth ink proxy while writing. The richer stored stroke is redrawn after commit.
+    const liveKind = kind === "pencil" ? "ink" : kind;
+    const liveSettings = kind === "pencil" ? { ...settings, grain: 0, opacity: settings.opacity * 0.9 } : settings;
+    drawRoundCurveSegment(ctx, p0, p1, p2, liveSettings, liveKind, seedBase + len * 1031);
+  }
+}
+
 function drawImagesToCanvas(ctx, images, selectedImageId, showSelection = true) {
   for (const image of images) {
     if (!image.element) continue;
@@ -755,8 +795,10 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [activeToolId, setActiveToolId] = useState("silkyPen");
   const [toolConfigs, setToolConfigs] = useState(() => JSON.parse(JSON.stringify(DEFAULT_TOOL_CONFIGS)));
   const [inputMode, setInputMode] = useState("penAndFinger");
-  const [pressureFloor, setPressureFloor] = useState(0.24);
-  const [pressureGain, setPressureGain] = useState(2.2);
+  const [pressureFloor, setPressureFloor] = useState(0.34);
+  const [pressureGain, setPressureGain] = useState(2.9);
+  const [pressureGamma, setPressureGamma] = useState(0.55);
+  const [liveQuality, setLiveQuality] = useState("turbo");
   const [paperTooth, setPaperTooth] = useState(0.72);
   const [paperPresetId, setPaperPresetId] = useState("warm");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
@@ -765,7 +807,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v4：道具ごとに設定を保存。消しゴムはArea/Strokeを切り替えできます。");
+  const [status, setStatus] = useState("v5：低遅延ライブ描画＋高感度S Pen設定。軽く書ける方向に調整しました。");
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
   const slidePreset = SLIDE_PRESETS[slidePresetId];
@@ -777,8 +819,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const canRedo = redoStackRef.current.length > 0;
 
   const pressureCalibration = useMemo(
-    () => ({ pressureFloor, pressureGain }),
-    [pressureFloor, pressureGain]
+    () => ({ pressureFloor, pressureGain, pressureGamma }),
+    [pressureFloor, pressureGain, pressureGamma]
   );
 
   const appBackground = useMemo(
@@ -1021,7 +1063,11 @@ export default function PencilRoomZFoldDrawingUXV4() {
     if (strokePointsRef.current.length > 80) {
       strokePointsRef.current = strokePointsRef.current.slice(-80);
     }
-    redrawStrokes(currentPage, currentStrokeRef.current);
+
+    const canvas = drawCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
+    drawIncrementalStrokeSegment(ctx, currentStrokeRef.current, liveQuality);
   }
 
   function commitLiveStroke() {
@@ -1741,6 +1787,17 @@ export default function PencilRoomZFoldDrawingUXV4() {
             </div>
 
             <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>Live performance</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <ToolbarButton compact active={liveQuality === "turbo"} onClick={() => setLiveQuality("turbo")}>Turbo</ToolbarButton>
+                <ToolbarButton compact active={liveQuality === "rich"} onClick={() => setLiveQuality("rich")}>Rich</ToolbarButton>
+              </div>
+              <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+                Turboは書いている最中だけ軽い線を描き、確定後に質感を整えます。軽やかさ優先ならTurbo推奨です。
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
               <SectionTitle>Zoom</SectionTitle>
               <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
                 二本指ピンチで拡大縮小できます。ピンチ中は描画しません。
@@ -1810,8 +1867,9 @@ export default function PencilRoomZFoldDrawingUXV4() {
               <RangeControl label="pressure response" value={activeTool.pressure} onChange={(v) => updateActiveToolConfig("pressure", v)} min={0} max={1.4} step={0.01} disabled={!activeIsDrawingTool} />
               <RangeControl label="velocity response" value={activeTool.velocity} onChange={(v) => updateActiveToolConfig("velocity", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
               <RangeControl label="grain" value={activeTool.grain} onChange={(v) => updateActiveToolConfig("grain", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
-              <RangeControl label="S Pen pressure floor" value={pressureFloor} onChange={setPressureFloor} min={0.02} max={0.55} step={0.01} />
-              <RangeControl label="S Pen pressure gain" value={pressureGain} onChange={setPressureGain} min={0.6} max={4} step={0.05} format={(v) => v.toFixed(2)} />
+              <RangeControl label="S Pen pressure floor" value={pressureFloor} onChange={setPressureFloor} min={0.02} max={0.8} step={0.01} />
+              <RangeControl label="S Pen pressure gain" value={pressureGain} onChange={setPressureGain} min={0.6} max={8} step={0.05} format={(v) => v.toFixed(2)} />
+              <RangeControl label="S Pen light-touch curve" value={pressureGamma} onChange={setPressureGamma} min={0.25} max={2.2} step={0.01} format={(v) => v.toFixed(2)} />
               <RangeControl label="paper tooth" value={paperTooth} onChange={setPaperTooth} min={0} max={1} step={0.01} />
             </div>
 
@@ -1885,7 +1943,8 @@ export function runBasicPenEngineTests() {
   assert("pen only allows pen", isPointerAllowedForDrawing("pen", "penOnly") === true);
   assert("pen only rejects touch drawing", isPointerAllowedForDrawing("touch", "penOnly") === false);
   assert("finger only allows touch", isPointerAllowedForDrawing("touch", "fingerOnly") === true);
-  assert("pen pressure floor helps light strokes", normalizePointerPressure({ pointerType: "pen", pressure: 0.02 }, { pressureFloor: 0.24, pressureGain: 2.2 }) > 0.25);
+  assert("pen pressure floor helps light strokes", normalizePointerPressure({ pointerType: "pen", pressure: 0.02 }, { pressureFloor: 0.34, pressureGain: 2.9, pressureGamma: 0.55 }) > 0.40);
+  assert("lower gamma lifts light pressure", normalizePointerPressure({ pointerType: "pen", pressure: 0.04 }, { pressureFloor: 0.1, pressureGain: 1, pressureGamma: 0.45 }) > normalizePointerPressure({ pointerType: "pen", pressure: 0.04 }, { pressureFloor: 0.1, pressureGain: 1, pressureGamma: 1.6 }));
 
   const stroke = {
     id: "s",
@@ -1933,6 +1992,7 @@ export const __testables = {
   shouldBeginPinch,
   isPointerAllowedForDrawing,
   normalizePointerPressure,
+  drawIncrementalStrokeSegment,
   makeEmptyPage,
   clonePage,
   PAPER_PRESETS,

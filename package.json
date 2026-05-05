@@ -1,6 +1,6 @@
 {
-  "name": "pencil-room-zfold-pinch-pwa-v4",
-  "version": "0.4.0",
+  "name": "pencil-room-zfold-low-latency-pwa-v5",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {

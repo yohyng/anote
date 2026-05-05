@@ -1,46 +1,38 @@
-# Pencil Room / Z Fold Pinch PWA v4
+# Pencil Room / Z Fold Low-Latency PWA v5
 
-Galaxy Z Fold 5 の見開き・分割画面利用を想定した、手書きノート + スライドPNG書き出し用PWAです。
+Galaxy Z Fold 5 + S Pen 向けに、書いている最中の軽さを優先して再調整した版です。
 
-## v4.0.0 updates
+## v5.0.0 updates
 
-- 標準的なノートアプリに近いツールレールUI
-- ツールごとの設定保存
-  - Silky / Graphite / Clean / Marker / Eraser それぞれに太さ・濃さ・補正などを保持
-- 消しゴムモード追加
-  - Area: 触れた範囲だけ消す
-  - Stroke: 触れたストロークを丸ごと消す
-- 内部的にストロークモデルを保持
-  - 今後の選択・移動・編集に拡張しやすい構造
-- Undo / Redo
-- S Pen pressure floor / gain
-- 二本指ピンチズーム対応
-- 画像追加、ドラッグ&ドロップ、クリップボード貼り込み
-- Galaxy AI Select / Smart SelectからのShare Target受け取り
-- Share PNG → OneDrive保存導線
-- PC側でPNGをPowerPointに追加する監視スクリプト維持
+- 低遅延ライブ描画
+  - 書いている最中は差分セグメントだけを直接描画
+  - 全ストローク再描画は確定後に回す
+- Live performance
+  - Turbo: 書いている最中は軽い線、確定後に質感を整える
+  - Rich: 書いている最中も質感を強める
+- S Pen感度設定を拡張
+  - pressure floor
+  - pressure gain
+  - light-touch curve / gamma
+- Silky Pen 初期値を軽い筆記向けに調整
+  - smoothingを下げて、追従遅れを減らす
+  - 軽い筆圧でも線が出やすい
+- Concepts参考の実装メモ
+  - pressure / tilt / velocity
+  - live smoothing
+  - tool presets
+  - stylusとfinger actionの分離
 
-## Folder structure
+## Recommended setting for light handwriting
 
 ```txt
-pencil-room-zfold-pinch-pwa-v4/
-  index.html
-  package.json
-  vite.config.js
-  src/
-    App.jsx
-    main.jsx
-    styles.css
-  public/
-    manifest.webmanifest
-    sw.js
-    icons/
-      icon-192.png
-      icon-512.png
-  pc-tools/
-    watch_onedrive_to_ppt.py
-  VERSION.txt
-  README.md
+Tool: Silky
+Live performance: Turbo
+S Pen pressure floor: 0.34 - 0.45
+S Pen pressure gain: 2.9 - 4.0
+S Pen light-touch curve: 0.45 - 0.65
+smoothing: 0.12 - 0.28
+grain: 0
 ```
 
 ## Vercel
@@ -51,22 +43,3 @@ Install Command: npm install
 Build Command: npm run build
 Output Directory: dist
 ```
-
-## Local dev
-
-```bash
-npm install
-npm run dev
-```
-
-## OneDrive → PowerPoint watcher
-
-```bash
-pip install python-pptx watchdog
-
-python pc-tools/watch_onedrive_to_ppt.py ^
-  --inbox "C:\Users\YOURNAME\OneDrive\PencilRoom\inbox" ^
-  --pptx "C:\Users\YOURNAME\OneDrive\PencilRoom\deck.pptx" ^
-  --processed "C:\Users\YOURNAME\OneDrive\PencilRoom\processed"
-```
-

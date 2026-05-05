@@ -1,46 +1,105 @@
-# Pencil Room Z Fold PWA
+# Pencil Room / Z Fold Pinch PWA v2
 
-Galaxy Z Fold 5 の見開き利用を想定した、キャンバス集中UIの手書きスライドノートです。
+Galaxy Z Fold 5 の見開き・分割画面利用を想定した、手書きノート + スライドPNG書き出し用PWAです。
+
+## 入っているもの
+
+```txt
+pencil-room-zfold-pinch-pwa-v2/
+  index.html
+  package.json
+  vite.config.js
+  src/
+    App.jsx
+    main.jsx
+    styles.css
+  public/
+    manifest.webmanifest
+    sw.js
+    icons/
+      icon-192.png
+      icon-512.png
+  pc-tools/
+    watch_onedrive_to_ppt.py
+  README.md
+```
 
 ## 主な仕様
 
-- Vite + React
-- PWA対応
-  - `manifest.webmanifest`
-  - `sw.js`
-  - `main.jsx` で service worker 登録
-- Galaxy Z Fold 5 見開き向け
-  - ページ一覧と設定は格納式
-  - 下部フローティングツールバー
-  - キャンバス中心UI
-- 二本指以上の誤描画を抑制
-  - 1つの primary pointer のみ描画
-  - 二本指以上の入力は描画しない
-- Share PNG → OneDrive `/PencilRoom/inbox` 保存想定
-- 画像追加、ドラッグ&ドロップ、クリップボード画像貼り付け対応
+- S Pen / 一本指で描画
+- 二本指ピンチでキャンバスを拡大縮小
+- 二本指中は描画しない
+- ズーム中も座標補正してペン位置がズレにくい
+- 画像の追加、ドラッグ&ドロップ、クリップボード貼り込み
+- PWA Share Target 対応
+  - Galaxy AI Select / Smart Select から共有した画像をPencil Roomに貼り込み
+- 背景色選択
+- 16:9 / 4:3 / 1:1 のスライド比率
+- Share PNG → Android共有メニュー → OneDrive `/PencilRoom/inbox` に保存
+- PC側でOneDriveフォルダを監視し、PowerPointにPNGを追記する想定
 
-## 開発
+## Vercel デプロイ設定
+
+```txt
+Framework Preset: Vite
+Install Command: npm install
+Build Command: npm run build
+Output Directory: dist
+```
+
+## ローカル実行
 
 ```bash
 npm install
 npm run dev
 ```
 
-## ビルド
+## Android / Galaxy Z Fold 5 での使い方
 
-```bash
-npm run build
-npm run preview
+1. VercelにデプロイしたURLをChromeまたはSamsung Internetで開く
+2. メニューから「ホーム画面に追加」
+3. Pencil RoomをPWAとして起動
+4. S Penまたは一本指で描画
+5. 二本指ピンチで拡大縮小
+6. `Share` からPNGをOneDrive `/PencilRoom/inbox` に保存
+
+## Galaxy AI Select / Smart Select からの貼り込み
+
+PWAをホーム画面に追加後、共有先に Pencil Room が表示される場合があります。
+
+```txt
+Instagramなどを表示
+↓
+Galaxy AI Select / Smart Selectで範囲選択
+↓
+Share
+↓
+Pencil Room
+↓
+キャンバスに画像貼り込み
 ```
 
-## Vercel
+端末・ブラウザ・PWAインストール状態によって Share Target の表示有無は変わります。
 
-- Framework Preset: Vite
-- Install Command: `npm install`
-- Build Command: `npm run build`
-- Output Directory: `dist`
+## PowerPoint自動追加
 
-## PWAについて
+`pc-tools/watch_onedrive_to_ppt.py` は、OneDriveに同期されたPNGフォルダを監視して、既存PPTXに新規スライドとして画像を追加するための補助スクリプトです。
 
-VercelにデプロイするとHTTPSになるため、Android Chrome / Samsung Internet でホーム画面追加しやすくなります。
-Service Workerは本番ビルド時のみ登録します。
+必要ライブラリ:
+
+```bash
+pip install python-pptx watchdog
+```
+
+実行例:
+
+```bash
+python pc-tools/watch_onedrive_to_ppt.py ^
+  --inbox "C:\Users\YOURNAME\OneDrive\PencilRoom\inbox" ^
+  --pptx "C:\Users\YOURNAME\OneDrive\PencilRoom\deck.pptx" ^
+  --processed "C:\Users\YOURNAME\OneDrive\PencilRoom\processed"
+```
+
+注意:
+- PowerPointを開いたままだとPPTX保存に失敗することがあります。
+- 複雑な既存テンプレートを完全保持したい場合は、PowerPoint COM版にするほうが安定します。

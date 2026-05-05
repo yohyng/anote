@@ -1,5 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+/**
+ * Pencil Room / Galaxy Z Fold PWA v2
+ * Self-contained React component. No external UI/icon libraries.
+ *
+ * Main flow:
+ * - Write with S Pen or one finger
+ * - Two-finger pinch zoom/pan for viewing the canvas
+ * - Pinch gestures never draw accidental strokes
+ * - Paste / drag-drop / file-select images into a slide-sized canvas
+ * - Share PNG from Android share sheet and save it to OneDrive/PencilRoom/inbox
+ * - Optional PWA Share Target: Samsung AI Select / Smart Select can share an image into this app
+ */
+
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -23,6 +36,7 @@ const SLIDE_PRESETS = {
 const TOOL_PRESETS = {
   silkyPen: {
     label: "Silky",
+    description: "なめらかで補正が効いたペン",
     width: 3.2,
     opacity: 0.88,
     smoothing: 0.56,
@@ -32,6 +46,7 @@ const TOOL_PRESETS = {
   },
   pencil: {
     label: "Graphite",
+    description: "紙目に引っかかる鉛筆",
     width: 2.6,
     opacity: 0.86,
     smoothing: 0.34,
@@ -41,6 +56,7 @@ const TOOL_PRESETS = {
   },
   technical: {
     label: "Clean",
+    description: "均質な製図ペン",
     width: 2.2,
     opacity: 0.94,
     smoothing: 0.76,
@@ -50,6 +66,7 @@ const TOOL_PRESETS = {
   },
   marker: {
     label: "Marker",
+    description: "太く柔らかいマーカー",
     width: 8,
     opacity: 0.22,
     smoothing: 0.52,
@@ -159,9 +176,19 @@ function drawPaperTexture(ctx, width, height, paperTooth, grainDots, paperPreset
 function getPointFromEvent(event, canvas) {
   const rect = canvas.getBoundingClientRect();
   const pressure = event.pressure && event.pressure > 0 ? event.pressure : 0.48;
+
+  // The frame is visually transformed during pinch zoom.
+  // getBoundingClientRect() returns the transformed size.
+  // offsetWidth/offsetHeight keep the logical canvas size.
+  // This inverse conversion keeps pen coordinates aligned while zoomed.
+  const logicalWidth = canvas.offsetWidth || rect.width || 1;
+  const logicalHeight = canvas.offsetHeight || rect.height || 1;
+  const scaleX = logicalWidth / Math.max(1, rect.width);
+  const scaleY = logicalHeight / Math.max(1, rect.height);
+
   return {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top,
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
     pressure,
     tiltX: event.tiltX || 0,
     tiltY: event.tiltY || 0,
@@ -245,6 +272,7 @@ function drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool) {
   const start = midpoint(p0, p1);
   const end = midpoint(p1, p2);
   const style = computeStrokeStyle(start, end, settings, tool);
+
   strokePath(ctx, start, p1, end, style, tool, true);
 
   const curveLength = distance(start, end);
@@ -318,8 +346,7 @@ function drawGraphiteSegment(ctx, from, to, settings) {
     const t = i / steps;
     const x = lerp(from.x, to.x, t);
     const y = lerp(from.y, to.y, t);
-    const skip = Math.random() < settings.grain * 0.08;
-    if (skip) continue;
+    if (Math.random() < settings.grain * 0.08) continue;
 
     const side = (Math.random() - 0.5) * style.width * (1 + settings.grain * 1.5);
     const forward = (Math.random() - 0.5) * style.width * 0.25;
@@ -419,6 +446,30 @@ async function shareOrDownloadCanvas(canvas, filename, onStatus) {
   onStatus?.("共有非対応のためPNGを保存しました。保存したPNGをOneDriveへ移動してください。");
 }
 
+function getClientMidpoint(a, b) {
+  return {
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+  };
+}
+
+function getClientDistance(a, b) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function getNextViewportForPinch(startViewport, startMid, currentMid, startDistance, currentDistance) {
+  const nextScale = clamp(startViewport.scale * (currentDistance / Math.max(1, startDistance)), 0.65, 4);
+  return {
+    scale: nextScale,
+    x: startViewport.x + currentMid.x - startMid.x,
+    y: startViewport.y + currentMid.y - startMid.y,
+  };
+}
+
+function shouldBeginPinch(activePointerCount) {
+  return activePointerCount >= 2;
+}
+
 function ToolbarButton({ active, onClick, children, title, disabled, compact = false }) {
   return (
     <button
@@ -426,7 +477,18 @@ function ToolbarButton({ active, onClick, children, title, disabled, compact = f
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`button ${active ? "active" : ""} ${compact ? "compact" : ""}`}
+      style={{
+        border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,0.92)",
+        background: disabled ? "#e7e5e4" : active ? "#292524" : "rgba(255,255,255,0.86)",
+        color: disabled ? "#a8a29e" : active ? "#ffffff" : "#292524",
+        borderRadius: 999,
+        padding: compact ? "8px 10px" : "10px 13px",
+        fontSize: compact ? 11 : 12,
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "all 0.15s ease",
+        boxShadow: active ? "0 6px 18px rgba(28,25,23,0.16)" : "0 2px 10px rgba(28,25,23,0.04)",
+        whiteSpace: "nowrap",
+      }}
     >
       {children}
     </button>
@@ -440,7 +502,20 @@ function FloatingButton({ active, onClick, children, title, disabled }) {
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`floating-button ${active ? "active" : ""}`}
+      style={{
+        minWidth: 44,
+        height: 44,
+        borderRadius: 999,
+        border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,.85)",
+        background: disabled ? "rgba(231,229,228,.75)" : active ? "#292524" : "rgba(255,255,255,.78)",
+        color: disabled ? "#a8a29e" : active ? "#fff" : "#292524",
+        display: "grid",
+        placeItems: "center",
+        boxShadow: "0 10px 28px rgba(28,25,23,.13)",
+        backdropFilter: "blur(18px)",
+        fontSize: 13,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
     >
       {children}
     </button>
@@ -449,10 +524,10 @@ function FloatingButton({ active, onClick, children, title, disabled }) {
 
 function RangeControl({ label, value, onChange, min, max, step, format }) {
   return (
-    <label className="range-control">
-      <div className="range-row">
+    <label style={{ display: "grid", gap: 8, fontSize: 12, color: "#57534e" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <span>{label}</span>
-        <span className="range-value">{format ? format(value) : Math.round(value * 100)}</span>
+        <span style={{ color: "#78716c", fontVariantNumeric: "tabular-nums" }}>{format ? format(value) : Math.round(value * 100)}</span>
       </div>
       <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
@@ -460,36 +535,32 @@ function RangeControl({ label, value, onChange, min, max, step, format }) {
 }
 
 function SectionTitle({ children }) {
-  return <div className="section-title">{children}</div>;
+  return <div style={{ fontSize: 11, color: "#78716c", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
 }
 
-export default function PencilRoomZFoldPWA() {
+export default function PencilRoomZFoldPinchPWA() {
   const frameRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const imageCanvasRef = useRef(null);
   const drawCanvasRef = useRef(null);
   const fileInputRef = useRef(null);
   const grainDotsRef = useRef([]);
-
   const drawingRef = useRef(false);
   const hasMovedRef = useRef(false);
   const lastPointRef = useRef(null);
   const lastRawPointRef = useRef(null);
   const strokePointsRef = useRef([]);
   const imageInteractionRef = useRef(null);
-
-  const activePointerIdRef = useRef(null);
-  const activePointerIdsRef = useRef(new Set());
-  const ignoredPointerIdsRef = useRef(new Set());
-  const multiTouchLockRef = useRef(false);
   const dragDepthRef = useRef(0);
+  const activePointersRef = useRef(new Map());
+  const activeDrawingPointerIdRef = useRef(null);
+  const pinchGestureRef = useRef(null);
 
   const [pages, setPages] = useState([makeEmptyPage(1)]);
   const [currentPageId, setCurrentPageId] = useState(null);
   const [selectedImageId, setSelectedImageId] = useState(null);
   const [tool, setTool] = useState("silkyPen");
   const [mode, setMode] = useState("draw");
-
   const [width, setWidth] = useState(TOOL_PRESETS.silkyPen.width);
   const [opacity, setOpacity] = useState(TOOL_PRESETS.silkyPen.opacity);
   const [smoothing, setSmoothing] = useState(TOOL_PRESETS.silkyPen.smoothing);
@@ -500,11 +571,11 @@ export default function PencilRoomZFoldPWA() {
   const [paperTooth, setPaperTooth] = useState(0.72);
   const [paperPresetId, setPaperPresetId] = useState("warm");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
-
   const [showPages, setShowPages] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [status, setStatus] = useState("Z Fold見開き向け：キャンバス中心UI。二本指以上は描画しません。");
+  const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
+  const [status, setStatus] = useState("Z Fold向け：二本指ピンチで拡大縮小、ペン/一本指で描画できます。");
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
   const slidePreset = SLIDE_PRESETS[slidePresetId];
@@ -515,6 +586,12 @@ export default function PencilRoomZFoldPWA() {
   const settings = useMemo(
     () => ({ width, opacity, smoothing, pressure, velocity, grain, density }),
     [width, opacity, smoothing, pressure, velocity, grain, density]
+  );
+
+  const appBackground = useMemo(
+    () =>
+      "radial-gradient(circle at 18% 8%, rgba(255,255,255,.56), transparent 30%), radial-gradient(circle at 86% 4%, rgba(150,130,92,.14), transparent 30%), linear-gradient(135deg, #eee8dd 0%, #ddd8cf 100%)",
+    []
   );
 
   useEffect(() => {
@@ -536,20 +613,13 @@ export default function PencilRoomZFoldPWA() {
     setPages((prev) => prev.map((page) => (page.id === currentPage.id ? { ...page, drawingDataUrl: dataUrl } : page)));
   }
 
-  function clearPointerState() {
-    activePointerIdsRef.current.clear();
-    ignoredPointerIdsRef.current.clear();
-    activePointerIdRef.current = null;
-    multiTouchLockRef.current = false;
-  }
-
-  function cancelStrokeWithoutTail() {
+  function resetStrokeState() {
     drawingRef.current = false;
     hasMovedRef.current = false;
     lastPointRef.current = null;
     lastRawPointRef.current = null;
     strokePointsRef.current = [];
-    activePointerIdRef.current = null;
+    activeDrawingPointerIdRef.current = null;
   }
 
   function redrawImages(images = currentPage.images, selectedId = selectedImageId) {
@@ -557,8 +627,10 @@ export default function PencilRoomZFoldPWA() {
     const frame = frameRef.current;
     if (!canvas || !frame) return;
     const rect = frame.getBoundingClientRect();
+    const logicalWidth = frame.offsetWidth || rect.width;
+    const logicalHeight = frame.offsetHeight || rect.height;
     const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
     drawImagesToCanvas(ctx, images, selectedId, true);
   }
 
@@ -566,8 +638,9 @@ export default function PencilRoomZFoldPWA() {
     const bgCanvas = bgCanvasRef.current;
     const frame = frameRef.current;
     if (!bgCanvas || !frame) return;
-    const rect = frame.getBoundingClientRect();
-    drawPaperTexture(bgCanvas.getContext("2d"), rect.width, rect.height, paperTooth, grainDotsRef.current, paperPreset);
+    const width = frame.offsetWidth || frame.getBoundingClientRect().width;
+    const height = frame.offsetHeight || frame.getBoundingClientRect().height;
+    drawPaperTexture(bgCanvas.getContext("2d"), width, height, paperTooth, grainDotsRef.current, paperPreset);
   }
 
   function setupCanvases(preserveDrawing = true) {
@@ -578,6 +651,8 @@ export default function PencilRoomZFoldPWA() {
     if (!frame || !bgCanvas || !imageCanvas || !drawCanvas) return;
 
     const rect = frame.getBoundingClientRect();
+    const logicalWidth = frame.offsetWidth || rect.width;
+    const logicalHeight = frame.offsetHeight || rect.height;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
 
     let previousDrawing = null;
@@ -589,21 +664,20 @@ export default function PencilRoomZFoldPWA() {
     }
 
     for (const canvas of [bgCanvas, imageCanvas, drawCanvas]) {
-      canvas.width = Math.floor(rect.width * dpr);
-      canvas.height = Math.floor(rect.height * dpr);
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
+      canvas.width = Math.floor(logicalWidth * dpr);
+      canvas.height = Math.floor(logicalHeight * dpr);
+      canvas.style.width = `${logicalWidth}px`;
+      canvas.style.height = `${logicalHeight}px`;
       canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    grainDotsRef.current = makePaperGrain(rect.width, rect.height);
-    drawPaperTexture(bgCanvas.getContext("2d"), rect.width, rect.height, paperTooth, grainDotsRef.current, paperPreset);
-
-    imageCanvas.getContext("2d").clearRect(0, 0, rect.width, rect.height);
-    drawCanvas.getContext("2d").clearRect(0, 0, rect.width, rect.height);
+    grainDotsRef.current = makePaperGrain(logicalWidth, logicalHeight);
+    drawPaperTexture(bgCanvas.getContext("2d"), logicalWidth, logicalHeight, paperTooth, grainDotsRef.current, paperPreset);
+    imageCanvas.getContext("2d").clearRect(0, 0, logicalWidth, logicalHeight);
+    drawCanvas.getContext("2d").clearRect(0, 0, logicalWidth, logicalHeight);
 
     if (previousDrawing) {
-      drawCanvas.getContext("2d").drawImage(previousDrawing, 0, 0, rect.width, rect.height);
+      drawCanvas.getContext("2d").drawImage(previousDrawing, 0, 0, logicalWidth, logicalHeight);
     }
 
     redrawImages();
@@ -614,22 +688,22 @@ export default function PencilRoomZFoldPWA() {
     const drawCanvas = drawCanvasRef.current;
     const imageCanvas = imageCanvasRef.current;
     if (!frame || !drawCanvas || !imageCanvas || !page) return;
-
-    const rect = frame.getBoundingClientRect();
+    const width = frame.offsetWidth || frame.getBoundingClientRect().width;
+    const height = frame.offsetHeight || frame.getBoundingClientRect().height;
     const drawCtx = drawCanvas.getContext("2d");
-    drawCtx.clearRect(0, 0, rect.width, rect.height);
+    drawCtx.clearRect(0, 0, width, height);
 
     if (page.drawingDataUrl) {
       const img = new Image();
       img.onload = () => {
-        drawCtx.clearRect(0, 0, rect.width, rect.height);
-        drawCtx.drawImage(img, 0, 0, rect.width, rect.height);
+        drawCtx.clearRect(0, 0, width, height);
+        drawCtx.drawImage(img, 0, 0, width, height);
       };
       img.src = page.drawingDataUrl;
     }
 
     const imageCtx = imageCanvas.getContext("2d");
-    imageCtx.clearRect(0, 0, rect.width, rect.height);
+    imageCtx.clearRect(0, 0, width, height);
     drawImagesToCanvas(imageCtx, page.images, selectedImageId, true);
   }
 
@@ -677,6 +751,34 @@ export default function PencilRoomZFoldPWA() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPageId, pages]);
 
+  useEffect(() => {
+    async function importSharedImages() {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.has("shared")) return;
+
+      try {
+        const response = await fetch("/shared/latest", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = await response.json();
+        const entries = Array.isArray(payload.entries) ? payload.entries : [];
+        for (const entry of entries) {
+          const imageResponse = await fetch(entry.url, { cache: "no-store" });
+          const blob = await imageResponse.blob();
+          const file = new File([blob], entry.name || "shared-image.png", { type: blob.type || entry.type || "image/png" });
+          handleImageFile(file, { source: "share-target" });
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+        setStatus("共有された画像をキャンバスに貼り込みました。");
+      } catch (error) {
+        setStatus(`共有画像の読み込みに失敗しました：${error.message}`);
+      }
+    }
+
+    importSharedImages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPageId]);
+
   function applyToolPreset(nextTool) {
     const preset = TOOL_PRESETS[nextTool];
     setTool(nextTool);
@@ -698,29 +800,27 @@ export default function PencilRoomZFoldPWA() {
     else drawRoundCurveSegment(ctx, p0, p1, p2, settings, tool);
   }
 
-  function isPointerAllowedToStart(event) {
-    if (event.pointerType === "touch" && event.isPrimary === false) return false;
-    if (activePointerIdsRef.current.size > 0) return false;
-    if (multiTouchLockRef.current) return false;
-    return true;
-  }
-
   function handlePointerDown(event) {
     event.preventDefault();
     const canvas = drawCanvasRef.current;
     if (!canvas || !currentPage) return;
 
-    activePointerIdsRef.current.add(event.pointerId);
+    activePointersRef.current.set(event.pointerId, event);
 
-    if (!isPointerAllowedToStart(event)) {
-      ignoredPointerIdsRef.current.add(event.pointerId);
-      multiTouchLockRef.current = true;
-      cancelStrokeWithoutTail();
-      setStatus("二本指以上の入力は描画しません。ペンまたは一本指で書けます。");
+    if (shouldBeginPinch(activePointersRef.current.size)) {
+      const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+      pinchGestureRef.current = {
+        startDistance: getClientDistance(pointers[0], pointers[1]),
+        startMid: getClientMidpoint(pointers[0], pointers[1]),
+        startViewport: { ...viewport },
+      };
+      resetStrokeState();
+      imageInteractionRef.current = null;
+      setStatus("二本指ピンチ中：キャンバス表示だけを拡大縮小しています。描画はしません。");
       return;
     }
 
-    activePointerIdRef.current = event.pointerId;
+    activeDrawingPointerIdRef.current = event.pointerId;
     canvas.setPointerCapture?.(event.pointerId);
     const raw = getPointFromEvent(event, canvas);
 
@@ -753,12 +853,30 @@ export default function PencilRoomZFoldPWA() {
 
   function handlePointerMove(event) {
     event.preventDefault();
-    if (ignoredPointerIdsRef.current.has(event.pointerId)) return;
-    if (activePointerIdRef.current !== event.pointerId) return;
-    if (multiTouchLockRef.current) return;
-
     const canvas = drawCanvasRef.current;
     if (!canvas || !currentPage) return;
+
+    if (activePointersRef.current.has(event.pointerId)) {
+      activePointersRef.current.set(event.pointerId, event);
+    }
+
+    if (pinchGestureRef.current && activePointersRef.current.size >= 2) {
+      const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+      const currentDistance = getClientDistance(pointers[0], pointers[1]);
+      const currentMid = getClientMidpoint(pointers[0], pointers[1]);
+      setViewport(
+        getNextViewportForPinch(
+          pinchGestureRef.current.startViewport,
+          pinchGestureRef.current.startMid,
+          currentMid,
+          pinchGestureRef.current.startDistance,
+          currentDistance
+        )
+      );
+      return;
+    }
+
+    if (activeDrawingPointerIdRef.current !== event.pointerId) return;
     const raw = getPointFromEvent(event, canvas);
 
     if (mode === "image" && imageInteractionRef.current) {
@@ -782,7 +900,6 @@ export default function PencilRoomZFoldPWA() {
     if (!drawingRef.current || !lastPointRef.current) return;
 
     const nativeEvents = event.getCoalescedEvents ? event.getCoalescedEvents() : [event];
-
     for (const nativeEvent of nativeEvents) {
       const nextRaw = getPointFromEvent(nativeEvent, canvas);
       const rawSpeed = lastRawPointRef.current ? speedBetween(lastRawPointRef.current, nextRaw) : 0;
@@ -815,39 +932,28 @@ export default function PencilRoomZFoldPWA() {
 
   function handlePointerUp(event) {
     event.preventDefault();
-
-    activePointerIdsRef.current.delete(event.pointerId);
-    ignoredPointerIdsRef.current.delete(event.pointerId);
-
-    if (activePointerIdRef.current !== event.pointerId) {
-      if (activePointerIdsRef.current.size === 0) clearPointerState();
-      return;
-    }
-
     const canvas = drawCanvasRef.current;
-    if (!canvas) {
-      clearPointerState();
+    if (!canvas) return;
+
+    activePointersRef.current.delete(event.pointerId);
+
+    if (activePointersRef.current.size < 2) {
+      pinchGestureRef.current = null;
+    }
+
+    if (activeDrawingPointerIdRef.current !== event.pointerId) {
+      if (activePointersRef.current.size === 0) activeDrawingPointerIdRef.current = null;
       return;
     }
 
-    if (multiTouchLockRef.current) {
-      cancelStrokeWithoutTail();
-      if (activePointerIdsRef.current.size === 0) clearPointerState();
-      return;
-    }
+    activeDrawingPointerIdRef.current = null;
 
     if (imageInteractionRef.current) {
       imageInteractionRef.current = null;
-      activePointerIdRef.current = null;
-      if (activePointerIdsRef.current.size === 0) clearPointerState();
       return;
     }
 
-    if (!drawingRef.current) {
-      activePointerIdRef.current = null;
-      if (activePointerIdsRef.current.size === 0) clearPointerState();
-      return;
-    }
+    if (!drawingRef.current) return;
 
     const ctx = canvas.getContext("2d");
     const points = strokePointsRef.current;
@@ -858,23 +964,15 @@ export default function PencilRoomZFoldPWA() {
       drawTailCurveSegment(ctx, points[points.length - 2], points[points.length - 1], settings, tool);
     }
 
-    drawingRef.current = false;
-    hasMovedRef.current = false;
-    lastPointRef.current = null;
-    lastRawPointRef.current = null;
-    strokePointsRef.current = [];
-    activePointerIdRef.current = null;
+    resetStrokeState();
     saveDrawingToPage();
-
-    if (activePointerIdsRef.current.size === 0) clearPointerState();
   }
 
   function handlePointerCancel(event) {
     event.preventDefault();
-    activePointerIdsRef.current.delete(event.pointerId);
-    ignoredPointerIdsRef.current.delete(event.pointerId);
-    if (activePointerIdRef.current === event.pointerId) cancelStrokeWithoutTail();
-    if (activePointerIdsRef.current.size === 0) clearPointerState();
+    activePointersRef.current.delete(event.pointerId);
+    if (activePointersRef.current.size < 2) pinchGestureRef.current = null;
+    if (activeDrawingPointerIdRef.current === event.pointerId) resetStrokeState();
   }
 
   function addPage() {
@@ -919,8 +1017,9 @@ export default function PencilRoomZFoldPWA() {
     const frame = frameRef.current;
     const drawCanvas = drawCanvasRef.current;
     if (!frame || !drawCanvas) return;
-    const rect = frame.getBoundingClientRect();
-    drawCanvas.getContext("2d").clearRect(0, 0, rect.width, rect.height);
+    const width = frame.offsetWidth || frame.getBoundingClientRect().width;
+    const height = frame.offsetHeight || frame.getBoundingClientRect().height;
+    drawCanvas.getContext("2d").clearRect(0, 0, width, height);
     updateCurrentPage({ drawingDataUrl: null, images: [] });
     setSelectedImageId(null);
     setStatus("現在のページをクリアしました。");
@@ -937,8 +1036,10 @@ export default function PencilRoomZFoldPWA() {
 
   function addImageElement(img, src, source = "file", offsetIndex = 0) {
     const rect = getFrameRect();
-    const maxWidth = rect.width * 0.72;
-    const maxHeight = rect.height * 0.72;
+    const logicalWidth = frameRef.current?.offsetWidth || rect.width;
+    const logicalHeight = frameRef.current?.offsetHeight || rect.height;
+    const maxWidth = logicalWidth * 0.72;
+    const maxHeight = logicalHeight * 0.72;
     const scale = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
     const width = img.width * scale;
     const height = img.height * scale;
@@ -947,8 +1048,8 @@ export default function PencilRoomZFoldPWA() {
       id: nowId("img"),
       src,
       element: img,
-      x: (rect.width - width) / 2 + offset,
-      y: (rect.height - height) / 2 + offset,
+      x: (logicalWidth - width) / 2 + offset,
+      y: (logicalHeight - height) / 2 + offset,
       width,
       height,
       opacity: 1,
@@ -958,7 +1059,7 @@ export default function PencilRoomZFoldPWA() {
     setSelectedImageId(imageRecord.id);
     setMode("image");
     redrawImages(nextImages, imageRecord.id);
-    const sourceLabel = source === "paste" ? "クリップボード" : source === "drop" ? "ドロップ" : "画像";
+    const sourceLabel = source === "paste" ? "クリップボード" : source === "drop" ? "ドロップ" : source === "share-target" ? "共有" : "画像";
     setStatus(`${sourceLabel}から画像を貼り込みました。Imageモードで移動・リサイズできます。`);
   }
 
@@ -1086,19 +1187,48 @@ export default function PencilRoomZFoldPWA() {
     setStatus("全ページのPNG保存を開始しました。保存先をinboxにするとPC側でPPTX化できます。");
   }
 
+  function resetZoom() {
+    setViewport({ scale: 1, x: 0, y: 0 });
+    setStatus("ズームを100%に戻しました。");
+  }
+
   return (
-    <div className="app">
-      <main className="workspace">
-        <header className="topbar">
-          <div className="topbar-left">
+    <div
+      style={{
+        minHeight: "100dvh",
+        background: appBackground,
+        padding: "env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)",
+        color: "#1c1917",
+        boxSizing: "border-box",
+        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        overflow: "hidden",
+      }}
+    >
+      <main style={{ height: "100dvh", width: "100vw", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", overflow: "hidden" }}>
+        <header
+          style={{
+            height: 54,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            padding: "8px 12px",
+            boxSizing: "border-box",
+            borderBottom: "1px solid rgba(214,211,209,0.72)",
+            background: "rgba(249,246,238,0.66)",
+            backdropFilter: "blur(18px)",
+            zIndex: 12,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>Pages</ToolbarButton>
-            <div className="title-block">
-              <div className="title">Pencil Room</div>
-              <div className="subtitle">{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Pencil Room</div>
+              <div style={{ fontSize: 10, color: "#78716c" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label} · {Math.round(viewport.scale * 100)}%</div>
             </div>
           </div>
 
-          <div className="topbar-actions">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", paddingBottom: 1 }}>
             <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
             <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>＋Img</ToolbarButton>
@@ -1108,7 +1238,7 @@ export default function PencilRoomZFoldPWA() {
         </header>
 
         <section
-          className="canvas-stage"
+          style={{ position: "relative", minHeight: 0, display: "grid", placeItems: "center", padding: 10, boxSizing: "border-box", overflow: "hidden" }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -1116,17 +1246,36 @@ export default function PencilRoomZFoldPWA() {
         >
           <div
             ref={frameRef}
-            className="slide-frame"
             style={{
-              "--ratio": slidePreset.ratio,
-              "--paper": paperPreset.color,
+              position: "relative",
+              width: "min(calc(100vw - 20px), calc((100dvh - 82px) * var(--ratio)))",
+              maxWidth: "calc(100vw - 20px)",
+              maxHeight: "calc(100dvh - 82px)",
+              aspectRatio: `${slidePreset.ratio}`,
+              overflow: "hidden",
+              background: paperPreset.color,
+              border: "1px solid rgba(168,162,158,0.75)",
+              borderRadius: 14,
+              boxShadow: "0 18px 42px rgba(28,25,23,0.13)",
+              transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
+              transformOrigin: "center center",
+              transition: pinchGestureRef.current ? "none" : "transform 120ms ease-out",
+              touchAction: "none",
+              ["--ratio"]: slidePreset.ratio,
             }}
           >
-            <canvas ref={bgCanvasRef} aria-hidden="true" className="layer" />
-            <canvas ref={imageCanvasRef} aria-hidden="true" className="layer" />
+            <canvas ref={bgCanvasRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
+            <canvas ref={imageCanvasRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
             <canvas
               ref={drawCanvasRef}
-              className={`layer draw-layer ${mode === "image" ? "image-mode" : ""}`}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                touchAction: "none",
+                cursor: mode === "image" ? "grab" : "crosshair",
+              }}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -1135,35 +1284,56 @@ export default function PencilRoomZFoldPWA() {
               onContextMenu={(event) => event.preventDefault()}
             />
 
-            {isDragOver && <div className="drop-cover">Drop image here</div>}
+            {isDragOver && (
+              <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(247,243,233,0.72)", border: "2px dashed rgba(41,37,36,0.45)", color: "#292524", fontSize: 15, fontWeight: 650, letterSpacing: 0.2, zIndex: 20, pointerEvents: "none" }}>
+                Drop image here
+              </div>
+            )}
 
-            <div className={`slide-badge ${darkPaper ? "light" : ""}`}>
-              {TOOL_PRESETS[tool].label} · {mode} · {paperPreset.label}
+            <div
+              style={{
+                pointerEvents: "none",
+                position: "absolute",
+                left: 12,
+                bottom: 10,
+                borderRadius: 999,
+                background: darkPaper ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.46)",
+                backdropFilter: "blur(6px)",
+                padding: "6px 9px",
+                fontSize: 10,
+                color: darkPaper ? "rgba(255,255,255,.72)" : "#78716c",
+              }}
+            >
+              {TOOL_PRESETS[tool].label} · {mode} · zoom {Math.round(viewport.scale * 100)}%
             </div>
           </div>
 
-          <div className="floating-toolbar">
+          <div style={{ position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", display: "flex", gap: 8, padding: 6, borderRadius: 999, background: "rgba(249,246,238,.64)", border: "1px solid rgba(214,211,209,.72)", boxShadow: "0 14px 32px rgba(28,25,23,.13)", backdropFilter: "blur(18px)", zIndex: 14 }}>
             <FloatingButton active={tool === "silkyPen" && mode === "draw"} onClick={() => applyToolPreset("silkyPen")}>Pen</FloatingButton>
             <FloatingButton active={tool === "pencil" && mode === "draw"} onClick={() => applyToolPreset("pencil")}>Pcl</FloatingButton>
             <FloatingButton active={false} onClick={addPage}>＋</FloatingButton>
-            <FloatingButton active={false} onClick={shareCurrentPage}>↗</FloatingButton>
+            <FloatingButton active={false} onClick={resetZoom}>100</FloatingButton>
             <FloatingButton active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</FloatingButton>
           </div>
 
-          {status && <div className="status-toast">{status}</div>}
+          {status && (
+            <div style={{ position: "absolute", right: 12, bottom: 70, maxWidth: 380, borderRadius: 18, background: "rgba(255,255,255,.58)", border: "1px solid rgba(214,211,209,.7)", padding: "8px 10px", fontSize: 11, color: "#78716c", lineHeight: 1.4, backdropFilter: "blur(12px)", pointerEvents: "none" }}>
+              {status}
+            </div>
+          )}
         </section>
       </main>
 
       {showPages && (
-        <div className="overlay">
-          <button className="overlay-backdrop" onClick={() => setShowPages(false)} aria-label="Close pages" />
-          <aside className="pages-drawer">
-            <div className="drawer-grid">
+        <div style={{ position: "fixed", inset: 0, zIndex: 30, pointerEvents: "none" }}>
+          <button type="button" onClick={() => setShowPages(false)} style={{ position: "absolute", inset: 0, background: "rgba(28,25,23,.10)", border: 0, pointerEvents: "auto" }} />
+          <aside style={{ position: "absolute", left: 10, top: 64, bottom: 12, width: 190, borderRadius: 26, border: "1px solid rgba(214,211,209,0.88)", background: "rgba(249,246,238,0.86)", backdropFilter: "blur(20px)", padding: 12, display: "grid", alignContent: "start", gap: 10, overflow: "auto", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", pointerEvents: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ToolbarButton compact active={false} onClick={addPage}>＋Page</ToolbarButton>
               <ToolbarButton compact active={false} onClick={duplicatePage}>Copy</ToolbarButton>
             </div>
             <ToolbarButton compact active={false} onClick={deletePage}>Delete current</ToolbarButton>
-            <div className="divider" />
+            <div style={{ height: 1, background: "rgba(214,211,209,.85)", margin: "2px 0" }} />
             {pages.map((page, index) => (
               <button
                 key={page.id}
@@ -1174,10 +1344,21 @@ export default function PencilRoomZFoldPWA() {
                   setSelectedImageId(null);
                   setShowPages(false);
                 }}
-                className={`page-card ${page.id === currentPage.id ? "active" : ""}`}
+                style={{
+                  textAlign: "left",
+                  border: page.id === currentPage.id ? "1px solid #292524" : "1px solid rgba(214,211,209,0.9)",
+                  background: page.id === currentPage.id ? "#292524" : "rgba(255,255,255,0.74)",
+                  color: page.id === currentPage.id ? "#fff" : "#292524",
+                  borderRadius: 18,
+                  padding: 10,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  display: "grid",
+                  gap: 4,
+                }}
               >
                 <span>{String(index + 1).padStart(2, "0")}</span>
-                <small>{page.images.length} image{page.images.length === 1 ? "" : "s"}</small>
+                <span style={{ opacity: 0.75 }}>{page.images.length} image{page.images.length === 1 ? "" : "s"}</span>
               </button>
             ))}
           </aside>
@@ -1185,56 +1366,85 @@ export default function PencilRoomZFoldPWA() {
       )}
 
       {showPanel && (
-        <div className="overlay">
-          <button className="overlay-backdrop" onClick={() => setShowPanel(false)} aria-label="Close settings" />
-          <aside className="settings-drawer">
-            <div className="drawer-header">
+        <div style={{ position: "fixed", inset: 0, zIndex: 31, pointerEvents: "none" }}>
+          <button type="button" onClick={() => setShowPanel(false)} style={{ position: "absolute", inset: 0, background: "rgba(28,25,23,.10)", border: 0, pointerEvents: "auto" }} />
+          <aside style={{ position: "absolute", right: 10, top: 64, bottom: 12, width: "min(360px, calc(100vw - 24px))", borderRadius: 28, border: "1px solid rgba(214,211,209,0.9)", background: "rgba(249,246,238,0.88)", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", backdropFilter: "blur(20px)", padding: 16, display: "grid", gap: 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div>
-                <div className="drawer-title">Settings</div>
-                <div className="drawer-subtitle">書き味・背景・出力</div>
+                <div style={{ fontSize: 14, fontWeight: 650 }}>Settings</div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>書き味・背景・出力・ズーム</div>
               </div>
               <ToolbarButton compact active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
             </div>
 
-            <div className="drawer-grid">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ToolbarButton compact active={mode === "draw"} onClick={() => setMode("draw")}>Draw</ToolbarButton>
               <ToolbarButton compact active={mode === "image"} onClick={() => setMode("image")}>Image</ToolbarButton>
               <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>画像追加</ToolbarButton>
               <ToolbarButton compact active={false} onClick={deleteSelectedImage} disabled={!selectedImageId}>画像削除</ToolbarButton>
             </div>
 
-            <div className="drawer-grid">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ToolbarButton compact active={false} onClick={downloadCurrentPage}>PNG保存</ToolbarButton>
               <ToolbarButton compact active={false} onClick={shareCurrentPage}>PNG共有</ToolbarButton>
               <ToolbarButton compact active={false} onClick={downloadAllPages}>全ページ保存</ToolbarButton>
               <ToolbarButton compact active={false} onClick={clearPage}>ページ消去</ToolbarButton>
             </div>
 
-            <div className="info-card">
-              <SectionTitle>OneDrive share flow</SectionTitle>
-              <p>Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。</p>
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>Zoom</SectionTitle>
+              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
+                二本指でピンチイン/アウトできます。ピンチ中は線を描かないため、誤描画を防げます。
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, scale: clamp(v.scale * 1.2, 0.65, 4) }))}>＋Zoom</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, scale: clamp(v.scale / 1.2, 0.65, 4) }))}>−Zoom</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={resetZoom}>Reset</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={() => setViewport((v) => ({ ...v, x: 0, y: 0 }))}>Center</ToolbarButton>
+              </div>
             </div>
 
-            <div className="setting-section">
+            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <SectionTitle>OneDrive share flow</SectionTitle>
+              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
+                Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。
+              </div>
+              <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.55 }}>
+                Galaxy AI Select / Smart Selectで範囲を切り抜き、共有先としてPencil Roomを選ぶと画像貼り込みできます。
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Background</SectionTitle>
-              <div className="preset-grid">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {Object.entries(PAPER_PRESETS).map(([id, preset]) => (
                   <button
                     key={id}
                     type="button"
                     onClick={() => setPaperPresetId(id)}
-                    className={`preset-button ${paperPresetId === id ? "active" : ""}`}
+                    style={{
+                      border: paperPresetId === id ? "1px solid #292524" : "1px solid rgba(214,211,209,.92)",
+                      borderRadius: 16,
+                      padding: 8,
+                      cursor: "pointer",
+                      background: "rgba(255,255,255,.75)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 11,
+                      color: "#292524",
+                    }}
                   >
-                    <span className="swatch" style={{ background: preset.color }} />
+                    <span style={{ width: 20, height: 20, borderRadius: 999, background: preset.color, border: "1px solid rgba(0,0,0,.12)", display: "inline-block" }} />
                     {preset.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="setting-section">
+            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Slide size</SectionTitle>
-              <div className="three-grid">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 {Object.entries(SLIDE_PRESETS).map(([id, preset]) => (
                   <ToolbarButton compact key={id} active={slidePresetId === id} onClick={() => setSlidePresetId(id)}>
                     {preset.label}
@@ -1243,20 +1453,20 @@ export default function PencilRoomZFoldPWA() {
               </div>
             </div>
 
-            <div className="setting-section">
+            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Pen</SectionTitle>
-              <div className="drawer-grid">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {Object.entries(TOOL_PRESETS).map(([id, preset]) => (
-                  <ToolbarButton compact key={id} active={tool === id} onClick={() => applyToolPreset(id)}>
+                  <ToolbarButton compact key={id} active={tool === id} onClick={() => applyToolPreset(id)} title={preset.description}>
                     {preset.label}
                   </ToolbarButton>
                 ))}
               </div>
             </div>
 
-            <div className="setting-section">
+            <div style={{ display: "grid", gap: 8 }}>
               <SectionTitle>Density</SectionTitle>
-              <div className="drawer-grid">
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {DENSITY_PRESETS.map((preset) => (
                   <ToolbarButton compact key={preset.id} active={Math.abs(density - preset.value) < 0.04} onClick={() => setDensity(preset.value)}>
                     {preset.label}
@@ -1265,7 +1475,7 @@ export default function PencilRoomZFoldPWA() {
               </div>
             </div>
 
-            <div className="slider-card">
+            <div style={{ display: "grid", gap: 13, borderRadius: 22, background: "rgba(255,255,255,0.58)", padding: 14 }}>
               <RangeControl label="width" value={width} onChange={setWidth} min={0.7} max={16} step={0.1} format={(v) => v.toFixed(1)} />
               <RangeControl label="opacity" value={opacity} onChange={setOpacity} min={0.04} max={1} step={0.01} />
               <RangeControl label="smoothing" value={smoothing} onChange={setSmoothing} min={0} max={0.9} step={0.01} />
@@ -1283,7 +1493,7 @@ export default function PencilRoomZFoldPWA() {
         type="file"
         accept="image/*"
         multiple
-        hidden
+        style={{ display: "none" }}
         onChange={(event) => {
           const files = event.target.files;
           if (files?.length) handleImageFiles(files, { source: "file" });
@@ -1307,13 +1517,45 @@ export function runBasicPenEngineTests() {
   assert("lerp midpoint", lerp(0, 10, 0.5) === 5);
   assert("distance 3-4-5", Math.abs(distance({ x: 0, y: 0 }, { x: 3, y: 4 }) - 5) < 0.0001);
 
+  const a = { x: 0, y: 0, pressure: 0.2, tiltX: 0, tiltY: 0, time: 0 };
+  const b = { x: 10, y: 20, pressure: 0.8, tiltX: 2, tiltY: 4, time: 10 };
+  const mid = midpoint(a, b);
+  assert("midpoint x", mid.x === 5);
+  assert("midpoint y", mid.y === 10);
+  assert("midpoint pressure", Math.abs(mid.pressure - 0.5) < 0.0001);
+
+  const qStart = { x: 0, y: 0, pressure: 0.2, tiltX: 0, tiltY: 0, time: 0 };
+  const qControl = { x: 10, y: 20, pressure: 0.5, tiltX: 0, tiltY: 0, time: 5 };
+  const qEnd = { x: 20, y: 0, pressure: 0.8, tiltX: 0, tiltY: 0, time: 10 };
+  const q0 = quadraticPoint(qStart, qControl, qEnd, 0);
+  const q1 = quadraticPoint(qStart, qControl, qEnd, 1);
+  assert("quadratic start", q0.x === qStart.x && q0.y === qStart.y);
+  assert("quadratic end", q1.x === qEnd.x && q1.y === qEnd.y);
+
+  assert("pressure curve is monotonic", pressureCurve(0.8) > pressureCurve(0.4));
+  assert("silky preset exists", !!TOOL_PRESETS.silkyPen);
+  assert("technical is smoother than pencil", TOOL_PRESETS.technical.smoothing > TOOL_PRESETS.pencil.smoothing);
+  assert("dark density darker than natural", DENSITY_PRESETS.find((x) => x.id === "dark").value > DENSITY_PRESETS.find((x) => x.id === "natural").value);
+  assert("silky pen grain default is clean", TOOL_PRESETS.silkyPen.grain === 0);
+  assert("silky pen suppresses low grain dots", computeGrainDotCount(100, 0.04, "silkyPen") === 0);
+  assert("pencil can still render grain dots", computeGrainDotCount(100, 0.64, "pencil") > 0);
+  assert("widescreen slide ratio is 16:9", Math.abs(SLIDE_PRESETS.widescreen.ratio - 16 / 9) < 0.0001);
+  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
+
   const page = makeEmptyPage(3);
   assert("empty page has name", page.name === "Page 03");
   assert("empty page has no images", page.images.length === 0);
   assert("image miss returns null", getImageHit([], 0, 0) === null);
   assert("image hit move", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 40, 40)?.mode === "move");
   assert("image hit resize", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 110, 90)?.mode === "resize");
-  assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
+  assert("paper presets include warm", !!PAPER_PRESETS.warm);
+  assert("paper preset has color", PAPER_PRESETS.blue.color.startsWith("#"));
+  assert("charcoal is dark paper", PAPER_PRESETS.charcoal.color === "#242424");
+  assert("two pointers begin pinch", shouldBeginPinch(2) === true);
+  assert("one pointer does not begin pinch", shouldBeginPinch(1) === false);
+  const pinchViewport = getNextViewportForPinch({ scale: 1, x: 0, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 20 }, 100, 200);
+  assert("pinch doubles scale", Math.abs(pinchViewport.scale - 2) < 0.0001);
+  assert("pinch pans by midpoint delta", pinchViewport.x === 10 && pinchViewport.y === 20);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
 
   return results;
@@ -1330,6 +1572,10 @@ export const __testables = {
   shouldRenderGrain,
   computeGrainDotCount,
   getImageHit,
+  getClientMidpoint,
+  getClientDistance,
+  getNextViewportForPinch,
+  shouldBeginPinch,
   makeEmptyPage,
   PAPER_PRESETS,
   SLIDE_PRESETS,

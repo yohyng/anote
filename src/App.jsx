@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v5
+ * Pencil Room / Galaxy Z Fold PWA v5.2
  * Self-contained React component. No external UI/icon libraries.
  *
- * v5 drawing UX / performance:
+ * v5.2 split-screen responsive UI + stable resize:
+ * - Versioned Service Worker cache
+ * - In-app update notification
  * - Low-latency live ink path inspired by Concepts-style drawing feel
  * - Direct incremental drawing while writing; rich redraw only after stroke commit
  * - More sensitive S Pen pressure calibration
@@ -19,7 +21,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v5.0.0";
+const APP_VERSION = "v5.2.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -230,6 +232,48 @@ function clonePage(page) {
     images: page.images.map((image) => ({ ...image })),
   };
 }
+
+function scalePointForFrame(point, sx, sy) {
+  return {
+    ...point,
+    x: point.x * sx,
+    y: point.y * sy,
+  };
+}
+
+function scalePageForResize(page, previousSize, nextSize) {
+  if (!page || !previousSize || !nextSize) return page;
+  const previousWidth = previousSize.width || 0;
+  const previousHeight = previousSize.height || 0;
+  const nextWidth = nextSize.width || 0;
+  const nextHeight = nextSize.height || 0;
+  if (previousWidth <= 0 || previousHeight <= 0 || nextWidth <= 0 || nextHeight <= 0) return page;
+
+  const sx = nextWidth / previousWidth;
+  const sy = nextHeight / previousHeight;
+  if (Math.abs(sx - 1) < 0.002 && Math.abs(sy - 1) < 0.002) return page;
+
+  return {
+    ...page,
+    strokes: (page.strokes || []).map((stroke) => ({
+      ...stroke,
+      points: (stroke.points || []).map((point) => scalePointForFrame(point, sx, sy)),
+    })),
+    images: (page.images || []).map((image) => ({
+      ...image,
+      x: image.x * sx,
+      y: image.y * sy,
+      width: image.width * sx,
+      height: image.height * sy,
+    })),
+  };
+}
+
+function shouldScalePageForResize(previousSize, nextSize) {
+  if (!previousSize || !nextSize) return false;
+  return Math.abs((previousSize.width || 0) - (nextSize.width || 0)) > 1 || Math.abs((previousSize.height || 0) - (nextSize.height || 0)) > 1;
+}
+
 
 function makePaperGrain(width, height) {
   const count = Math.floor((width * height) / 130);
@@ -709,15 +753,16 @@ function ToolbarButton({ active, onClick, children, title, disabled, compact = f
       onClick={onClick}
       disabled={disabled}
       style={{
-        border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,0.92)",
-        background: disabled ? "#e7e5e4" : active ? "#292524" : "rgba(255,255,255,0.86)",
-        color: disabled ? "#a8a29e" : active ? "#ffffff" : "#292524",
+        border: active ? "1px solid #000" : "1px solid #d4d4d4",
+        background: disabled ? "#f5f5f5" : active ? "#000" : "#fff",
+        color: disabled ? "#a3a3a3" : active ? "#fff" : "#000",
         borderRadius: 999,
-        padding: compact ? "8px 10px" : "10px 13px",
-        fontSize: compact ? 11 : 12,
+        padding: compact ? "7px 8px" : "9px 12px",
+        fontSize: compact ? 10.5 : 12,
+        lineHeight: 1,
         cursor: disabled ? "not-allowed" : "pointer",
-        transition: "all 0.15s ease",
-        boxShadow: active ? "0 6px 18px rgba(28,25,23,0.16)" : "0 2px 10px rgba(28,25,23,0.04)",
+        transition: "all 0.12s ease",
+        boxShadow: "none",
         whiteSpace: "nowrap",
       }}
     >
@@ -733,17 +778,17 @@ function ToolRailButton({ active, tool, onClick }) {
       onClick={onClick}
       title={tool.description}
       style={{
-        width: 48,
-        height: 48,
-        borderRadius: 18,
-        border: active ? "1px solid #292524" : "1px solid rgba(214,211,209,.85)",
-        background: active ? "#292524" : "rgba(255,255,255,.78)",
-        color: active ? "#fff" : "#292524",
+        width: "clamp(38px, 10.5vw, 48px)",
+        height: "clamp(38px, 10.5vw, 48px)",
+        flex: "0 0 auto",
+        borderRadius: "clamp(13px, 4vw, 18px)",
+        border: active ? "1px solid #000" : "1px solid #d4d4d4",
+        background: active ? "#000" : "#fff",
+        color: active ? "#fff" : "#000",
         display: "grid",
         placeItems: "center",
-        boxShadow: active ? "0 12px 28px rgba(28,25,23,.18)" : "0 10px 28px rgba(28,25,23,.08)",
-        backdropFilter: "blur(18px)",
-        fontSize: 17,
+        boxShadow: "none",
+        fontSize: "clamp(14px, 4.2vw, 17px)",
         cursor: "pointer",
       }}
     >
@@ -754,10 +799,10 @@ function ToolRailButton({ active, tool, onClick }) {
 
 function RangeControl({ label, value, onChange, min, max, step, format, disabled }) {
   return (
-    <label style={{ display: "grid", gap: 8, fontSize: 12, color: disabled ? "#a8a29e" : "#57534e", opacity: disabled ? 0.7 : 1 }}>
+    <label style={{ display: "grid", gap: 8, fontSize: 12, color: disabled ? "#a3a3a3" : "#111", opacity: disabled ? 0.7 : 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <span>{label}</span>
-        <span style={{ color: "#78716c", fontVariantNumeric: "tabular-nums" }}>{format ? format(value) : Math.round(value * 100)}</span>
+        <span style={{ color: "#525252", fontVariantNumeric: "tabular-nums" }}>{format ? format(value) : Math.round(value * 100)}</span>
       </div>
       <input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))} />
     </label>
@@ -765,7 +810,7 @@ function RangeControl({ label, value, onChange, min, max, step, format, disabled
 }
 
 function SectionTitle({ children }) {
-  return <div style={{ fontSize: 11, color: "#78716c", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
+  return <div style={{ fontSize: 11, color: "#525252", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
 }
 
 export default function PencilRoomZFoldDrawingUXV4() {
@@ -788,6 +833,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const pinchGestureRef = useRef(null);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
+  const pageMetricsRef = useRef(new Map());
 
   const [pages, setPages] = useState([makeEmptyPage(1)]);
   const [currentPageId, setCurrentPageId] = useState(null);
@@ -807,7 +853,10 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v5：低遅延ライブ描画＋高感度S Pen設定。軽く書ける方向に調整しました。");
+  const [status, setStatus] = useState("v5.2：Z Fold縦分割向けにUIを小型化し、画面サイズ変更時の描画スケールを安定化しました。");
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [windowSize, setWindowSize] = useState(() => ({ width: typeof window === "undefined" ? 1024 : window.innerWidth, height: typeof window === "undefined" ? 768 : window.innerHeight }));
+  const updateRegistrationRef = useRef(null);
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
   const slidePreset = SLIDE_PRESETS[slidePresetId];
@@ -823,11 +872,16 @@ export default function PencilRoomZFoldDrawingUXV4() {
     [pressureFloor, pressureGain, pressureGamma]
   );
 
-  const appBackground = useMemo(
-    () =>
-      "radial-gradient(circle at 18% 8%, rgba(255,255,255,.56), transparent 30%), radial-gradient(circle at 86% 4%, rgba(150,130,92,.14), transparent 30%), linear-gradient(135deg, #eee8dd 0%, #ddd8cf 100%)",
-    []
-  );
+  const appBackground = useMemo(() => "#ffffff", []);
+
+  const isNarrowViewport = windowSize.width < 560;
+  const isVeryNarrowViewport = windowSize.width < 430;
+  const isShortViewport = windowSize.height < 640;
+  const headerHeight = isNarrowViewport ? 46 : 54;
+  const canvasReserveHeight = isNarrowViewport ? 106 : 92;
+  const shellPadding = isNarrowViewport ? 4 : 10;
+  const chromeBorder = "1px solid #d4d4d4";
+  const panelBackground = "#fff";
 
   useEffect(() => {
     if (!currentPageId && pages.length > 0) setCurrentPageId(pages[0].id);
@@ -921,8 +975,18 @@ export default function PencilRoomZFoldDrawingUXV4() {
       canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
+    const nextMetrics = { width: logicalWidth, height: logicalHeight };
+    const previousMetrics = currentPage?.id ? pageMetricsRef.current.get(currentPage.id) : null;
+    let pageToRender = currentPage;
+
+    if (preserveDrawing && currentPage?.id && shouldScalePageForResize(previousMetrics, nextMetrics)) {
+      pageToRender = scalePageForResize(currentPage, previousMetrics, nextMetrics);
+      setPages((prev) => prev.map((page) => (page.id === currentPage.id ? pageToRender : page)));
+    }
+
+    if (currentPage?.id) pageMetricsRef.current.set(currentPage.id, nextMetrics);
     grainDotsRef.current = makePaperGrain(logicalWidth, logicalHeight);
-    renderPage(currentPage);
+    renderPage(pageToRender);
   }
 
   function redrawPaper() {
@@ -965,9 +1029,17 @@ export default function PencilRoomZFoldDrawingUXV4() {
 
   useEffect(() => {
     requestAnimationFrame(() => setupCanvases(false));
-    const onResize = () => requestAnimationFrame(() => setupCanvases(true));
+    const onResize = () =>
+      requestAnimationFrame(() => {
+        setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+        setupCanvases(true);
+      });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1542,56 +1614,82 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const statusTextColor = darkPaper ? "rgba(255,255,255,.72)" : "#78716c";
   const activeIsDrawingTool = activeTool.kind !== "image";
 
+  useEffect(() => {
+    function handleUpdateAvailable(event) {
+      updateRegistrationRef.current = event.detail?.registration || null;
+      setUpdateAvailable(true);
+      setStatus("新しいバージョンを読み込めます。Updateボタンで反映できます。");
+    }
+
+    window.addEventListener("pencilroom:update-available", handleUpdateAvailable);
+    return () => window.removeEventListener("pencilroom:update-available", handleUpdateAvailable);
+  }, []);
+
+  async function applyAppUpdate() {
+    const registration = updateRegistrationRef.current || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
+    if (registration?.waiting) {
+      registration.waiting.postMessage({ type: "SKIP_WAITING" });
+      setStatus("アップデートを適用しています。自動で再読み込みします。");
+      return;
+    }
+    if (registration) {
+      await registration.update();
+      setStatus("更新を確認しました。変化がない場合は一度ブラウザで再読み込みしてください。");
+    } else {
+      window.location.reload();
+    }
+  }
+
   return (
     <div
       style={{
         minHeight: "100dvh",
         background: appBackground,
         padding: "env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)",
-        color: "#1c1917",
+        color: "#000",
         boxSizing: "border-box",
         fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         overflow: "hidden",
       }}
     >
-      <main style={{ height: "100dvh", width: "100vw", display: "grid", gridTemplateRows: "auto minmax(0,1fr)", overflow: "hidden" }}>
+      <main style={{ height: "100dvh", width: "100vw", display: "grid", gridTemplateRows: `${headerHeight}px minmax(0,1fr)`, overflow: "hidden" }}>
         <header
           style={{
-            height: 54,
+            height: headerHeight,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 10,
-            padding: "8px 12px",
+            gap: isNarrowViewport ? 6 : 10,
+            padding: isNarrowViewport ? "6px 6px" : "8px 12px",
             boxSizing: "border-box",
-            borderBottom: "1px solid rgba(214,211,209,0.72)",
-            background: "rgba(249,246,238,0.66)",
-            backdropFilter: "blur(18px)",
+            borderBottom: chromeBorder,
+            background: panelBackground,
             zIndex: 12,
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>Pages</ToolbarButton>
+            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>{isNarrowViewport ? "Pg" : "Pages"}</ToolbarButton>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                Pencil Room <span style={{ fontSize: 10, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span>
+                {isVeryNarrowViewport ? "Pencil" : "Pencil Room"} <span style={{ fontSize: 10, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span>
               </div>
-              <div style={{ fontSize: 10, color: "#78716c" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
+              {!isVeryNarrowViewport && <div style={{ fontSize: 10, color: "#525252" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>}
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8, overflowX: "auto", paddingBottom: 1 }}>
-            <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>Undo</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>Redo</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>＋Img</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>Paste</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={shareCurrentPage}>Share</ToolbarButton>
+          <div style={{ display: "flex", alignItems: "center", gap: isNarrowViewport ? 5 : 8, overflowX: "auto", paddingBottom: 1, minWidth: 0, flex: "1 1 auto", justifyContent: "flex-end", scrollbarWidth: "none" }}>
+            {updateAvailable && <ToolbarButton compact active={true} onClick={applyAppUpdate}>Update</ToolbarButton>}
+            <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>{isNarrowViewport ? "↶" : "Undo"}</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>{isNarrowViewport ? "↷" : "Redo"}</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>{isNarrowViewport ? "+" : "＋Img"}</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>{isNarrowViewport ? "Pst" : "Paste"}</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>
             <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
           </div>
         </header>
 
         <section
-          style={{ position: "relative", minHeight: 0, display: "grid", placeItems: "center", padding: 10, boxSizing: "border-box", overflow: "hidden" }}
+          style={{ position: "relative", minHeight: 0, display: "grid", placeItems: "center", padding: shellPadding, boxSizing: "border-box", overflow: "hidden" }}
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -1601,15 +1699,15 @@ export default function PencilRoomZFoldDrawingUXV4() {
             ref={frameRef}
             style={{
               position: "relative",
-              width: "min(calc(100vw - 20px), calc((100dvh - 82px) * var(--ratio)))",
-              maxWidth: "calc(100vw - 20px)",
-              maxHeight: "calc(100dvh - 82px)",
+              width: `min(calc(100vw - ${shellPadding * 2}px), calc((100dvh - ${canvasReserveHeight}px) * var(--ratio)))`,
+              maxWidth: `calc(100vw - ${shellPadding * 2}px)`,
+              maxHeight: `calc(100dvh - ${canvasReserveHeight}px)`,
               aspectRatio: `${slidePreset.ratio}`,
               overflow: "hidden",
               background: paperPreset.color,
-              border: "1px solid rgba(168,162,158,0.75)",
-              borderRadius: 14,
-              boxShadow: "0 18px 42px rgba(28,25,23,0.13)",
+              border: "1px solid #d4d4d4",
+              borderRadius: isNarrowViewport ? 8 : 14,
+              boxShadow: "none",
               transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.scale})`,
               transformOrigin: "center center",
               transition: pinchGestureRef.current ? "none" : "transform 120ms ease-out",
@@ -1650,8 +1748,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
                 left: 10,
                 bottom: 9,
                 borderRadius: 999,
-                background: darkPaper ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.38)",
-                backdropFilter: "blur(6px)",
+                background: darkPaper ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.86)",
+                border: "1px solid #e5e5e5",
                 padding: "4px 7px",
                 fontSize: 9,
                 color: statusTextColor,
@@ -1661,7 +1759,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
             </div>
           </div>
 
-          <div style={{ position: "absolute", left: "50%", bottom: 12, transform: "translateX(-50%)", display: "flex", gap: 8, padding: 6, borderRadius: 26, background: "rgba(249,246,238,.64)", border: "1px solid rgba(214,211,209,.72)", boxShadow: "0 14px 32px rgba(28,25,23,.13)", backdropFilter: "blur(18px)", zIndex: 14 }}>
+          <div style={{ position: "absolute", left: "50%", bottom: isNarrowViewport ? 6 : 12, transform: "translateX(-50%)", display: "flex", gap: isNarrowViewport ? 5 : 8, padding: isNarrowViewport ? 4 : 6, borderRadius: 999, background: "#fff", border: chromeBorder, boxShadow: "none", zIndex: 14, maxWidth: `calc(100vw - ${shellPadding * 2 + 4}px)`, overflowX: "auto", boxSizing: "border-box", scrollbarWidth: "none" }}>
             {TOOL_ORDER.map((toolId) => (
               <ToolRailButton
                 key={toolId}
@@ -1670,13 +1768,13 @@ export default function PencilRoomZFoldDrawingUXV4() {
                 onClick={() => selectTool(toolId)}
               />
             ))}
-            <div style={{ width: 1, background: "rgba(214,211,209,.8)", margin: "4px 0" }} />
+            <div style={{ width: 1, flex: "0 0 auto", background: "#d4d4d4", margin: "4px 0" }} />
             <ToolRailButton active={false} tool={{ icon: "＋", description: "New page" }} onClick={addPage} />
             <ToolRailButton active={false} tool={{ icon: "100", description: "Zoom reset" }} onClick={resetZoom} />
           </div>
 
           {status && (
-            <div style={{ position: "absolute", right: 12, bottom: 74, maxWidth: 380, borderRadius: 18, background: "rgba(255,255,255,.58)", border: "1px solid rgba(214,211,209,.7)", padding: "8px 10px", fontSize: 11, color: "#78716c", lineHeight: 1.4, backdropFilter: "blur(12px)", pointerEvents: "none" }}>
+            <div style={{ position: "absolute", right: shellPadding + 2, bottom: isNarrowViewport ? 58 : 74, maxWidth: isNarrowViewport ? "calc(100vw - 18px)" : 380, borderRadius: 14, background: "#fff", border: chromeBorder, padding: isNarrowViewport ? "5px 7px" : "8px 10px", fontSize: isNarrowViewport ? 9 : 11, color: "#525252", lineHeight: 1.35, pointerEvents: "none", whiteSpace: isVeryNarrowViewport ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis" }}>
               {status}
             </div>
           )}
@@ -1685,8 +1783,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
 
       {showPages && (
         <div style={{ position: "fixed", inset: 0, zIndex: 30, pointerEvents: "none" }}>
-          <button type="button" onClick={() => setShowPages(false)} style={{ position: "absolute", inset: 0, background: "rgba(28,25,23,.10)", border: 0, pointerEvents: "auto" }} />
-          <aside style={{ position: "absolute", left: 10, top: 64, bottom: 12, width: 190, borderRadius: 26, border: "1px solid rgba(214,211,209,0.88)", background: "rgba(249,246,238,0.86)", backdropFilter: "blur(20px)", padding: 12, display: "grid", alignContent: "start", gap: 10, overflow: "auto", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", pointerEvents: "auto" }}>
+          <button type="button" onClick={() => setShowPages(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.08)", border: 0, pointerEvents: "auto" }} />
+          <aside style={{ position: "absolute", left: shellPadding, top: headerHeight + 8, bottom: shellPadding + 2, width: `min(190px, calc(100vw - ${shellPadding * 2}px))`, borderRadius: 20, border: chromeBorder, background: panelBackground, padding: 10, display: "grid", alignContent: "start", gap: 8, overflow: "auto", boxShadow: "none", pointerEvents: "auto" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ToolbarButton compact active={false} onClick={addPage}>＋Page</ToolbarButton>
               <ToolbarButton compact active={false} onClick={duplicatePage}>Copy</ToolbarButton>
@@ -1704,9 +1802,9 @@ export default function PencilRoomZFoldDrawingUXV4() {
                 }}
                 style={{
                   textAlign: "left",
-                  border: page.id === currentPage.id ? "1px solid #292524" : "1px solid rgba(214,211,209,0.9)",
-                  background: page.id === currentPage.id ? "#292524" : "rgba(255,255,255,0.74)",
-                  color: page.id === currentPage.id ? "#fff" : "#292524",
+                  border: page.id === currentPage.id ? "1px solid #000" : "1px solid #d4d4d4",
+                  background: page.id === currentPage.id ? "#000" : "#fff",
+                  color: page.id === currentPage.id ? "#fff" : "#000",
                   borderRadius: 18,
                   padding: 10,
                   cursor: "pointer",
@@ -1725,12 +1823,12 @@ export default function PencilRoomZFoldDrawingUXV4() {
 
       {showPanel && (
         <div style={{ position: "fixed", inset: 0, zIndex: 31, pointerEvents: "none" }}>
-          <button type="button" onClick={() => setShowPanel(false)} style={{ position: "absolute", inset: 0, background: "rgba(28,25,23,.10)", border: 0, pointerEvents: "auto" }} />
-          <aside style={{ position: "absolute", right: 10, top: 64, bottom: 12, width: "min(380px, calc(100vw - 24px))", borderRadius: 28, border: "1px solid rgba(214,211,209,0.9)", background: "rgba(249,246,238,0.9)", boxShadow: "0 18px 42px rgba(28,25,23,0.16)", backdropFilter: "blur(20px)", padding: 16, display: "grid", gap: 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
+          <button type="button" onClick={() => setShowPanel(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.08)", border: 0, pointerEvents: "auto" }} />
+          <aside style={{ position: "absolute", right: shellPadding, top: headerHeight + 8, bottom: shellPadding + 2, width: `min(380px, calc(100vw - ${shellPadding * 2}px))`, borderRadius: 20, border: chromeBorder, background: panelBackground, boxShadow: "none", padding: isNarrowViewport ? 12 : 16, display: "grid", gap: isNarrowViewport ? 10 : 14, alignContent: "start", overflow: "auto", pointerEvents: "auto" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 14, fontWeight: 650 }}>Tool Settings <span style={{ fontSize: 11, color: "#78716c", fontWeight: 500 }}>{APP_VERSION}</span></div>
-                <div style={{ marginTop: 3, fontSize: 11, color: "#78716c" }}>{activeTool.icon} {activeTool.label} / {activeTool.description}</div>
+                <div style={{ fontSize: 14, fontWeight: 650 }}>Tool Settings <span style={{ fontSize: 11, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span></div>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#525252" }}>{activeTool.icon} {activeTool.label} / {activeTool.description}</div>
               </div>
               <ToolbarButton compact active={false} onClick={() => setShowPanel(false)}>Close</ToolbarButton>
             </div>
@@ -1742,16 +1840,16 @@ export default function PencilRoomZFoldDrawingUXV4() {
               <ToolbarButton compact active={false} onClick={clearPage}>ページ消去</ToolbarButton>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
               <SectionTitle>Undo / Redo</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>Undo</ToolbarButton>
-                <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>Redo</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>{isNarrowViewport ? "↶" : "Undo"}</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>{isNarrowViewport ? "↷" : "Redo"}</ToolbarButton>
               </div>
-              <div style={{ fontSize: 11, color: "#78716c" }}>history {historyTick} / strokes {currentPage?.strokes?.filter((s) => !s.hidden).length || 0}</div>
+              <div style={{ fontSize: 11, color: "#525252" }}>history {historyTick} / strokes {currentPage?.strokes?.filter((s) => !s.hidden).length || 0}</div>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
               <SectionTitle>Input</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8 }}>
                 {Object.entries(INPUT_MODE_PRESETS).map(([id, preset]) => (
@@ -1763,13 +1861,13 @@ export default function PencilRoomZFoldDrawingUXV4() {
             </div>
 
             {activeTool.kind === "eraser" && (
-              <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+              <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
                 <SectionTitle>Eraser mode</SectionTitle>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <ToolbarButton compact active={activeTool.eraserMode === "area"} onClick={() => updateActiveToolConfig("eraserMode", "area")}>Area</ToolbarButton>
                   <ToolbarButton compact active={activeTool.eraserMode === "stroke"} onClick={() => updateActiveToolConfig("eraserMode", "stroke")}>Stroke</ToolbarButton>
                 </div>
-                <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+                <div style={{ fontSize: 11, color: "#525252", lineHeight: 1.5 }}>
                   Areaは触れた範囲だけを消します。Strokeは触れた線を丸ごと消します。
                 </div>
               </div>
@@ -1786,20 +1884,20 @@ export default function PencilRoomZFoldDrawingUXV4() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
               <SectionTitle>Live performance</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <ToolbarButton compact active={liveQuality === "turbo"} onClick={() => setLiveQuality("turbo")}>Turbo</ToolbarButton>
                 <ToolbarButton compact active={liveQuality === "rich"} onClick={() => setLiveQuality("rich")}>Rich</ToolbarButton>
               </div>
-              <div style={{ fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+              <div style={{ fontSize: 11, color: "#525252", lineHeight: 1.5 }}>
                 Turboは書いている最中だけ軽い線を描き、確定後に質感を整えます。軽やかさ優先ならTurbo推奨です。
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
               <SectionTitle>Zoom</SectionTitle>
-              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
+              <div style={{ fontSize: 11, color: "#111", lineHeight: 1.55 }}>
                 二本指ピンチで拡大縮小できます。ピンチ中は描画しません。
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1860,7 +1958,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gap: 13, borderRadius: 22, background: "rgba(255,255,255,0.58)", padding: 14 }}>
+            <div style={{ display: "grid", gap: 13, borderRadius: 22, background: "#fff", padding: 14 }}>
               <RangeControl label="width" value={activeTool.width} onChange={(v) => updateActiveToolConfig("width", v)} min={activeTool.kind === "eraser" ? 4 : 0.7} max={activeTool.kind === "eraser" ? 64 : 18} step={0.1} format={(v) => v.toFixed(1)} disabled={!activeIsDrawingTool} />
               <RangeControl label="opacity" value={activeTool.opacity} onChange={(v) => updateActiveToolConfig("opacity", v)} min={0.04} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
               <RangeControl label="smoothing" value={activeTool.smoothing} onChange={(v) => updateActiveToolConfig("smoothing", v)} min={0} max={0.9} step={0.01} disabled={!activeIsDrawingTool} />
@@ -1874,15 +1972,23 @@ export default function PencilRoomZFoldDrawingUXV4() {
             </div>
 
             {selectedImageId && (
-              <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 18, padding: 12 }}>
+              <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 18, padding: 12 }}>
                 <SectionTitle>Selected image</SectionTitle>
                 <ToolbarButton compact active={false} onClick={deleteSelectedImage}>画像削除</ToolbarButton>
               </div>
             )}
 
-            <div style={{ display: "grid", gap: 8, border: "1px solid rgba(214,211,209,.9)", borderRadius: 20, padding: 12, background: "rgba(255,255,255,.42)" }}>
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
+              <SectionTitle>PWA update</SectionTitle>
+              <div style={{ fontSize: 11, color: "#111", lineHeight: 1.55 }}>
+                現在の表示バージョンは {APP_VERSION} です。古い表示が残る場合は Update、ブラウザ再読み込み、またはインストール済みPWAの再起動を試してください。
+              </div>
+              <ToolbarButton compact active={updateAvailable} onClick={applyAppUpdate}>{updateAvailable ? "Update available" : "Check update"}</ToolbarButton>
+            </div>
+
+            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
               <SectionTitle>OneDrive share flow</SectionTitle>
-              <div style={{ fontSize: 11, color: "#57534e", lineHeight: 1.55 }}>
+              <div style={{ fontSize: 11, color: "#111", lineHeight: 1.55 }}>
                 Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。
               </div>
             </div>
@@ -1969,6 +2075,12 @@ export function runBasicPenEngineTests() {
   assert("paper presets include warm", !!PAPER_PRESETS.warm);
   assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
+  assert("app version is v5.2.0", APP_VERSION === "v5.2.0");
+  const resizedPage = scalePageForResize({ ...page, strokes: [{ id: "s", points: [{ x: 10, y: 20 }], settings: {} }], images: [{ id: "i", x: 10, y: 10, width: 100, height: 50 }] }, { width: 100, height: 100 }, { width: 200, height: 300 });
+  assert("resize scales stroke x", resizedPage.strokes[0].points[0].x === 20);
+  assert("resize scales stroke y", resizedPage.strokes[0].points[0].y === 60);
+  assert("resize scales image width", resizedPage.images[0].width === 200);
+  assert("should scale resize detects changed size", shouldScalePageForResize({ width: 100, height: 100 }, { width: 120, height: 100 }) === true);
 
   return results;
 }

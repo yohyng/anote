@@ -1,9 +1,8 @@
-Pencil Room v5.0.0
+Pencil Room v5.2.0
 
-Low-latency drawing update:
-- Incremental live drawing
-- Turbo / Rich live quality
-- More sensitive S Pen pressure response
-- Added light-touch pressure curve
-- Reduced smoothing default for quicker handwriting
-- Keeps v4 tool rail, eraser, image import, PWA, and Share PNG → OneDrive workflow
+Updates:
+- Z Fold split-screen compact UI
+- Black/white UI shell
+- Resize-stable canvas content scaling
+- Versioned PWA cache v5.2.0
+- Previous low-latency pen and S Pen sensitivity features retained

@@ -43,3 +43,31 @@ Install Command: npm install
 Build Command: npm run build
 Output Directory: dist
 ```
+
+
+## v5.2.0 PWA update behavior
+
+This patch fixes a likely version-update issue in installed PWAs.
+
+What changed:
+- `APP_VERSION` is now `v5.2.0`.
+- `public/sw.js` uses a versioned cache name: `pencil-room-app-v5.2.0`.
+- Legacy app caches such as `pencil-room-v2` are deleted on Service Worker activation.
+- `src/main.jsx` registers `/sw.js?v=v5.2.0` with `updateViaCache: "none"`.
+- The app shows an `Update` button when a waiting Service Worker is detected.
+- Settings includes a PWA update section.
+
+If Android still shows an older version:
+1. Open the Vercel URL in Chrome directly and reload once.
+2. Close and reopen the installed PWA.
+3. If it still persists, remove the installed app and install it again.
+4. As a developer check: Chrome DevTools > Application > Service Workers > Update / Unregister.
+
+
+## v5.2.0 updates
+
+- Galaxy Z Fold split-screen / narrow vertical layout support.
+- Header buttons and bottom tool rail are horizontally scrollable and compact on narrow widths.
+- UI shell changed to a stricter black/white palette.
+- Canvas content is scaled when the app window is resized, so handwriting and pasted images keep their relative position and apparent scale.
+- Service Worker cache version updated to v5.2.0.

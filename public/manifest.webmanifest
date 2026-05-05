@@ -1,7 +1,7 @@
 {
-  "name": "Pencil Room v5",
+  "name": "Pencil Room v5.2",
   "short_name": "Pencil Room",
-  "description": "Low-latency S Pen note app with sensitive pressure tuning and slide-sized PNG export.",
+  "description": "Z Fold handwriting note app optimized for split-screen, low-latency drawing, and slide PNG export.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

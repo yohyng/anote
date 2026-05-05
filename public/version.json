@@ -1,10 +1,5 @@
 {
-  "version": "v5.2.0",
-  "build": "2026-05-05-zfold-split-responsive",
-  "notes": [
-    "split-screen compact UI",
-    "black and white UI shell",
-    "resize-stable page coordinate scaling",
-    "versioned service worker cache"
-  ]
+  "version": "v5.4.0",
+  "build": "2026-05-05-subtle-ink-pooling",
+  "notes": "Adds subtle low-speed/pressure/corner ink pooling for more natural pen accumulation."
 }

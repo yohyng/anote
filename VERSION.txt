@@ -1,8 +1,7 @@
-Pencil Room v5.2.0
+Pencil Room v5.4.0
 
 Updates:
-- Z Fold split-screen compact UI
-- Black/white UI shell
-- Resize-stable canvas content scaling
-- Versioned PWA cache v5.2.0
-- Previous low-latency pen and S Pen sensitivity features retained
+- Subtle ink pooling / たまり
+- Pooling responds to low speed, pressure, and curve/corner amount
+- Per-tool ink pooling slider
+- PWA cache version updated

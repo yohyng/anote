@@ -1,34 +1,39 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v5.2
+ * Pencil Room / Galaxy Z Fold PWA v5.4
  * Self-contained React component. No external UI/icon libraries.
  *
- * v5.2 split-screen responsive UI + stable resize:
+ * v5.4 subtle ink pooling:
  * - Versioned Service Worker cache
  * - In-app update notification
  * - Low-latency live ink path inspired by Concepts-style drawing feel
  * - Direct incremental drawing while writing; rich redraw only after stroke commit
  * - More sensitive S Pen pressure calibration
- * - Standard note-app-like tool rail
+ * - Tool rail moved into Settings to keep the canvas visually clean
  * - Per-tool saved settings
  * - Eraser supports area erase and stroke erase
  * - Stroke model for future editing
  * - Undo / Redo
  * - S Pen pressure floor / gain
  * - Two-finger pinch zoom/pan does not draw accidental strokes
+ * - White canvas is the default
+ * - Higher backing resolution for smoother zoomed handwriting
  * - Paste / file / drag-drop image import
+ * - Subtle ink pooling / line accumulation for Concepts-like pen feel
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v5.2.0";
+const APP_VERSION = "v5.4.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
+const MAX_CANVAS_BACKING_SCALE = 4;
+const CANVAS_RESOLUTION_BOOST = 1.55;
 
 const PAPER_PRESETS = {
   warm: { label: "Warm", color: "#f7f3e9", tooth: "rgba(76,68,54," },
-  white: { label: "White", color: "#fbfaf6", tooth: "rgba(82,82,82," },
+  white: { label: "White", color: "#ffffff", tooth: "rgba(82,82,82," },
   gray: { label: "Gray", color: "#eceae4", tooth: "rgba(60,60,58," },
   cream: { label: "Cream", color: "#fbf0d1", tooth: "rgba(98,74,42," },
   blue: { label: "Blue", color: "#e8f1f4", tooth: "rgba(40,70,88," },
@@ -56,6 +61,7 @@ const DEFAULT_TOOL_CONFIGS = {
     velocity: 0.12,
     grain: 0,
     density: 1,
+    inkPooling: 0.18,
   },
   pencil: {
     id: "pencil",
@@ -70,6 +76,7 @@ const DEFAULT_TOOL_CONFIGS = {
     velocity: 0.28,
     grain: 0.48,
     density: 1.08,
+    inkPooling: 0.06,
   },
   technical: {
     id: "technical",
@@ -84,6 +91,7 @@ const DEFAULT_TOOL_CONFIGS = {
     velocity: 0.05,
     grain: 0,
     density: 1,
+    inkPooling: 0.05,
   },
   marker: {
     id: "marker",
@@ -98,6 +106,7 @@ const DEFAULT_TOOL_CONFIGS = {
     velocity: 0.1,
     grain: 0,
     density: 1,
+    inkPooling: 0.14,
   },
   eraser: {
     id: "eraser",
@@ -147,6 +156,10 @@ const INPUT_MODE_PRESETS = {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function getCanvasBackingScale(devicePixelRatio = 1) {
+  return clamp(Math.max(1, devicePixelRatio) * CANVAS_RESOLUTION_BOOST, 1, MAX_CANVAS_BACKING_SCALE);
 }
 
 function lerp(a, b, t) {
@@ -367,19 +380,54 @@ function speedBetween(a, b) {
   return distance(a, b) / dt;
 }
 
-function computeStrokeStyle(from, to, settings, kind) {
+function turnAmount(a, b, c) {
+  if (!a || !b || !c) return 0;
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const bcx = c.x - b.x;
+  const bcy = c.y - b.y;
+  const ab = Math.hypot(abx, aby);
+  const bc = Math.hypot(bcx, bcy);
+  if (ab < 0.001 || bc < 0.001) return 0;
+  const dot = clamp((abx * bcx + aby * bcy) / (ab * bc), -1, 1);
+  const angle = Math.acos(dot);
+  return clamp(angle / (Math.PI * 0.6), 0, 1);
+}
+
+function computeInkPool(settings, style, pressureValue, turn = 0) {
+  const amount = settings.inkPooling || 0;
+  if (amount <= 0) return 0;
+  const lowSpeed = 1 - style.speed;
+  const pressureHold = clamp((pressureValue - 0.38) / 0.62, 0, 1);
+  const turnHold = clamp(turn, 0, 1);
+  // Keep this subtle: slow movement matters most, curves add a small local accumulation.
+  return clamp(amount * (0.58 * lowSpeed + 0.24 * pressureHold + 0.18 * turnHold), 0, 0.42);
+}
+
+function computeStrokeStyle(from, to, settings, kind, turn = 0) {
   const speed = clamp(speedBetween(from, to) / 1.8, 0, 1);
   const pressureValue = pressureCurve(to.pressure);
   const pressureWidth = 1 + settings.pressure * (pressureValue - 0.48);
   const velocityWidth = 1 - settings.velocity * speed * 0.42;
-  const width = Math.max(0.25, settings.width * pressureWidth * velocityWidth);
 
   const pressureAlpha = 0.68 + pressureValue * 0.42 * settings.pressure;
   const velocityAlpha = 1 - settings.velocity * speed * 0.28;
   const toolBoost = kind === "pencil" ? 1.1 : kind === "ink" ? 1 : 1;
-  const alpha = settings.opacity * settings.density * pressureAlpha * velocityAlpha * toolBoost;
 
-  return { width, alpha, speed };
+  const baseStyle = {
+    width: Math.max(0.25, settings.width * pressureWidth * velocityWidth),
+    alpha: settings.opacity * settings.density * pressureAlpha * velocityAlpha * toolBoost,
+    speed,
+  };
+  const pool = computeInkPool(settings, baseStyle, pressureValue, turn);
+
+  return {
+    width: baseStyle.width * (1 + pool * 0.16),
+    alpha: baseStyle.alpha * (1 + pool * 0.22),
+    speed,
+    pool,
+    pressureValue,
+  };
 }
 
 function shouldRenderGrain(kind, grain) {
@@ -402,8 +450,9 @@ function strokePath(ctx, start, control, end, style, kind) {
   ctx.lineJoin = "round";
 
   if (kind === "ink" || kind === "marker") {
-    ctx.strokeStyle = rgba(INK_COLOR, style.alpha * (kind === "marker" ? 0.16 : 0.055));
-    ctx.lineWidth = style.width * (kind === "marker" ? 1.8 : 1.28);
+    const pool = style.pool || 0;
+    ctx.strokeStyle = rgba(INK_COLOR, style.alpha * (kind === "marker" ? 0.16 + pool * 0.04 : 0.055 + pool * 0.06));
+    ctx.lineWidth = style.width * (kind === "marker" ? 1.8 + pool * 0.28 : 1.28 + pool * 0.42);
     ctx.beginPath();
     ctx.moveTo(start.x, start.y);
     ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
@@ -422,7 +471,8 @@ function strokePath(ctx, start, control, end, style, kind) {
 function drawRoundCurveSegment(ctx, p0, p1, p2, settings, kind, seed = 1) {
   const start = midpoint(p0, p1);
   const end = midpoint(p1, p2);
-  const style = computeStrokeStyle(start, end, settings, kind);
+  const turn = turnAmount(p0, p1, p2);
+  const style = computeStrokeStyle(start, end, settings, kind, turn);
 
   strokePath(ctx, start, p1, end, style, kind);
 
@@ -845,15 +895,15 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [pressureGain, setPressureGain] = useState(2.9);
   const [pressureGamma, setPressureGamma] = useState(0.55);
   const [liveQuality, setLiveQuality] = useState("turbo");
-  const [paperTooth, setPaperTooth] = useState(0.72);
-  const [paperPresetId, setPaperPresetId] = useState("warm");
+  const [paperTooth, setPaperTooth] = useState(0);
+  const [paperPresetId, setPaperPresetId] = useState("white");
   const [slidePresetId, setSlidePresetId] = useState("widescreen");
   const [showPages, setShowPages] = useState(false);
   const [showPanel, setShowPanel] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v5.2：Z Fold縦分割向けにUIを小型化し、画面サイズ変更時の描画スケールを安定化しました。");
+  const [status, setStatus] = useState("v5.4：ペンにごく薄いインクだまりを追加しました。強すぎる場合は ink pooling を下げてください。");
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [windowSize, setWindowSize] = useState(() => ({ width: typeof window === "undefined" ? 1024 : window.innerWidth, height: typeof window === "undefined" ? 768 : window.innerHeight }));
   const updateRegistrationRef = useRef(null);
@@ -965,14 +1015,17 @@ export default function PencilRoomZFoldDrawingUXV4() {
     const rect = frame.getBoundingClientRect();
     const logicalWidth = frame.offsetWidth || rect.width;
     const logicalHeight = frame.offsetHeight || rect.height;
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const backingScale = getCanvasBackingScale(window.devicePixelRatio || 1);
 
     for (const canvas of [bgCanvas, imageCanvas, drawCanvas]) {
-      canvas.width = Math.floor(logicalWidth * dpr);
-      canvas.height = Math.floor(logicalHeight * dpr);
+      canvas.width = Math.floor(logicalWidth * backingScale);
+      canvas.height = Math.floor(logicalHeight * backingScale);
       canvas.style.width = `${logicalWidth}px`;
       canvas.style.height = `${logicalHeight}px`;
-      canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
     }
 
     const nextMetrics = { width: logicalWidth, height: logicalHeight };
@@ -1299,7 +1352,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
       const dynamicSmoothing = clamp(activeTool.smoothing - rawSpeed * 0.08, 0.03, 0.9);
       const smooth = smoothPoint(lastPointRef.current, nextRaw, dynamicSmoothing);
 
-      if (distance(lastPointRef.current, smooth) < 0.08) {
+      if (distance(lastPointRef.current, smooth) < 0.04) {
         lastRawPointRef.current = nextRaw;
         continue;
       }
@@ -1681,6 +1734,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
             {updateAvailable && <ToolbarButton compact active={true} onClick={applyAppUpdate}>Update</ToolbarButton>}
             <ToolbarButton compact active={false} onClick={undo} disabled={!canUndo}>{isNarrowViewport ? "↶" : "Undo"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={redo} disabled={!canRedo}>{isNarrowViewport ? "↷" : "Redo"}</ToolbarButton>
+            <ToolbarButton compact active={false} onClick={() => setShowPanel(true)}>{isNarrowViewport ? activeTool.icon : activeTool.label}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>{isNarrowViewport ? "+" : "＋Img"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>{isNarrowViewport ? "Pst" : "Paste"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>
@@ -1740,41 +1794,10 @@ export default function PencilRoomZFoldDrawingUXV4() {
                 Drop image here
               </div>
             )}
-
-            <div
-              style={{
-                pointerEvents: "none",
-                position: "absolute",
-                left: 10,
-                bottom: 9,
-                borderRadius: 999,
-                background: darkPaper ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.86)",
-                border: "1px solid #e5e5e5",
-                padding: "4px 7px",
-                fontSize: 9,
-                color: statusTextColor,
-              }}
-            >
-              {activeTool.label} · {activeTool.kind === "eraser" ? activeTool.eraserMode : activeTool.kind} · {Math.round(viewport.scale * 100)}%
-            </div>
-          </div>
-
-          <div style={{ position: "absolute", left: "50%", bottom: isNarrowViewport ? 6 : 12, transform: "translateX(-50%)", display: "flex", gap: isNarrowViewport ? 5 : 8, padding: isNarrowViewport ? 4 : 6, borderRadius: 999, background: "#fff", border: chromeBorder, boxShadow: "none", zIndex: 14, maxWidth: `calc(100vw - ${shellPadding * 2 + 4}px)`, overflowX: "auto", boxSizing: "border-box", scrollbarWidth: "none" }}>
-            {TOOL_ORDER.map((toolId) => (
-              <ToolRailButton
-                key={toolId}
-                active={activeToolId === toolId}
-                tool={toolConfigs[toolId]}
-                onClick={() => selectTool(toolId)}
-              />
-            ))}
-            <div style={{ width: 1, flex: "0 0 auto", background: "#d4d4d4", margin: "4px 0" }} />
-            <ToolRailButton active={false} tool={{ icon: "＋", description: "New page" }} onClick={addPage} />
-            <ToolRailButton active={false} tool={{ icon: "100", description: "Zoom reset" }} onClick={resetZoom} />
           </div>
 
           {status && (
-            <div style={{ position: "absolute", right: shellPadding + 2, bottom: isNarrowViewport ? 58 : 74, maxWidth: isNarrowViewport ? "calc(100vw - 18px)" : 380, borderRadius: 14, background: "#fff", border: chromeBorder, padding: isNarrowViewport ? "5px 7px" : "8px 10px", fontSize: isNarrowViewport ? 9 : 11, color: "#525252", lineHeight: 1.35, pointerEvents: "none", whiteSpace: isVeryNarrowViewport ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ position: "absolute", right: shellPadding + 2, top: shellPadding + 2, maxWidth: isNarrowViewport ? "calc(100vw - 18px)" : 320, borderRadius: 999, background: "rgba(255,255,255,.82)", border: chromeBorder, padding: "3px 7px", fontSize: 9, color: "#525252", lineHeight: 1.35, pointerEvents: "none", whiteSpace: isVeryNarrowViewport ? "nowrap" : "normal", overflow: "hidden", textOverflow: "ellipsis" }}>
               {status}
             </div>
           )}
@@ -1965,6 +1988,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
               <RangeControl label="pressure response" value={activeTool.pressure} onChange={(v) => updateActiveToolConfig("pressure", v)} min={0} max={1.4} step={0.01} disabled={!activeIsDrawingTool} />
               <RangeControl label="velocity response" value={activeTool.velocity} onChange={(v) => updateActiveToolConfig("velocity", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
               <RangeControl label="grain" value={activeTool.grain} onChange={(v) => updateActiveToolConfig("grain", v)} min={0} max={1} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser"} />
+              <RangeControl label="ink pooling / たまり" value={activeTool.inkPooling || 0} onChange={(v) => updateActiveToolConfig("inkPooling", v)} min={0} max={0.45} step={0.01} disabled={!activeIsDrawingTool || activeTool.kind === "eraser" || activeTool.kind === "image"} format={(v) => v.toFixed(2)} />
               <RangeControl label="S Pen pressure floor" value={pressureFloor} onChange={setPressureFloor} min={0.02} max={0.8} step={0.01} />
               <RangeControl label="S Pen pressure gain" value={pressureGain} onChange={setPressureGain} min={0.6} max={8} step={0.05} format={(v) => v.toFixed(2)} />
               <RangeControl label="S Pen light-touch curve" value={pressureGamma} onChange={setPressureGamma} min={0.25} max={2.2} step={0.01} format={(v) => v.toFixed(2)} />
@@ -2043,6 +2067,7 @@ export function runBasicPenEngineTests() {
   assert("pressure curve is monotonic", pressureCurve(0.8) > pressureCurve(0.4));
   assert("silky config exists", !!DEFAULT_TOOL_CONFIGS.silkyPen);
   assert("technical is smoother than pencil", DEFAULT_TOOL_CONFIGS.technical.smoothing > DEFAULT_TOOL_CONFIGS.pencil.smoothing);
+  assert("silky pen has subtle ink pooling", DEFAULT_TOOL_CONFIGS.silkyPen.inkPooling > 0 && DEFAULT_TOOL_CONFIGS.silkyPen.inkPooling < 0.25);
   assert("eraser has area mode by default", DEFAULT_TOOL_CONFIGS.eraser.eraserMode === "area");
   assert("two pointers begin pinch", shouldBeginPinch(2) === true);
   assert("one pointer does not begin pinch", shouldBeginPinch(1) === false);
@@ -2063,6 +2088,8 @@ export function runBasicPenEngineTests() {
   };
   assert("stroke hit test detects nearby point", strokeHitTest(stroke, { x: 50, y: 3 }, 6) === true);
   assert("stroke hit test rejects far point", strokeHitTest(stroke, { x: 50, y: 30 }, 6) === false);
+  assert("turn amount detects corner", turnAmount({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }) > 0.5);
+  assert("ink pooling increases slow styles", computeStrokeStyle({ x: 0, y: 0, pressure: 0.8, time: 0 }, { x: 0.1, y: 0, pressure: 0.8, time: 30 }, { width: 3, opacity: 0.9, density: 1, pressure: 0.6, velocity: 0.1, inkPooling: 0.2 }, "ink", 0.5).pool > 0);
 
   const page = makeEmptyPage(3);
   assert("empty page has name", page.name === "Page 03");
@@ -2075,7 +2102,9 @@ export function runBasicPenEngineTests() {
   assert("paper presets include warm", !!PAPER_PRESETS.warm);
   assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
-  assert("app version is v5.2.0", APP_VERSION === "v5.2.0");
+  assert("app version is v5.4.0", APP_VERSION === "v5.4.0");
+  assert("white paper preset is true white", PAPER_PRESETS.white.color === "#ffffff");
+  assert("backing scale is boosted but capped", getCanvasBackingScale(3) <= MAX_CANVAS_BACKING_SCALE && getCanvasBackingScale(1) > 1);
   const resizedPage = scalePageForResize({ ...page, strokes: [{ id: "s", points: [{ x: 10, y: 20 }], settings: {} }], images: [{ id: "i", x: 10, y: 10, width: 100, height: 50 }] }, { width: 100, height: 100 }, { width: 200, height: 300 });
   assert("resize scales stroke x", resizedPage.strokes[0].points[0].x === 20);
   assert("resize scales stroke y", resizedPage.strokes[0].points[0].y === 60);
@@ -2087,6 +2116,7 @@ export function runBasicPenEngineTests() {
 
 export const __testables = {
   clamp,
+  getCanvasBackingScale,
   lerp,
   distance,
   midpoint,

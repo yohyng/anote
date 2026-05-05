@@ -1,4 +1,4 @@
-const APP_VERSION = "v5.2.0";
+const APP_VERSION = "v5.4.0";
 const CACHE_NAME = `pencil-room-app-${APP_VERSION}`;
 const SHARE_CACHE = "pencil-room-shared-v5";
 const APP_CACHE_PREFIX = "pencil-room-app-";
@@ -7,7 +7,9 @@ const LEGACY_APP_CACHES = new Set([
   "pencil-room-v2",
   "pencil-room-v3",
   "pencil-room-v4",
-  "pencil-room-v5"
+  "pencil-room-v5",
+  "pencil-room-app-v5.2.0",
+  "pencil-room-app-v5.3.0"
 ]);
 
 const APP_SHELL = [

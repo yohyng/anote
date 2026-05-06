@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v5.5
+ * Pencil Room / Galaxy Z Fold PWA v6.0
  * Self-contained React component. No external UI/icon libraries.
  *
- * v5.5 tool rail + opacity-safe texture:
+ * v6.0 Graph OneDrive upload + PPT watcher:
  * - Versioned Service Worker cache
  * - In-app update notification
  * - Low-latency live ink path inspired by Concepts-style drawing feel
@@ -25,10 +25,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v5.5.0";
+const APP_VERSION = "v6.0.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
+const GRAPH_SCOPES = "openid profile User.Read Files.ReadWrite offline_access";
+const GRAPH_SETTINGS_KEY = "pencilroom_graph_settings_v1";
+const GRAPH_TOKEN_KEY = "pencilroom_graph_token_v1";
+const GRAPH_PKCE_KEY = "pencilroom_graph_pkce_v1";
 const MAX_CANVAS_BACKING_SCALE = 4;
 const CANVAS_RESOLUTION_BOOST = 1.55;
 
@@ -755,6 +759,147 @@ function downloadCanvas(canvas, filename) {
   link.click();
 }
 
+function getRedirectUri() {
+  return window.location.origin + window.location.pathname;
+}
+
+function base64UrlEncode(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function randomString(length = 64) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  return Array.from(values, (value) => chars[value % chars.length]).join("");
+}
+
+async function sha256(text) {
+  const data = new TextEncoder().encode(text);
+  return crypto.subtle.digest("SHA-256", data);
+}
+
+async function createPkcePair() {
+  const verifier = randomString(96);
+  const challenge = base64UrlEncode(await sha256(verifier));
+  return { verifier, challenge };
+}
+
+function normalizeOneDrivePath(path) {
+  const cleaned = String(path || "").trim();
+  if (!cleaned || cleaned === "/") return ONEDRIVE_INBOX_HINT;
+  return `/${cleaned.split("/").filter(Boolean).join("/")}`;
+}
+
+function encodeGraphPath(path) {
+  return normalizeOneDrivePath(path)
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+async function graphFetch(accessToken, url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const json = await response.json();
+      detail = json?.error?.message || JSON.stringify(json);
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(`${response.status} ${response.statusText}${detail ? `: ${detail}` : ""}`);
+  }
+
+  if (response.status === 204) return null;
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return response.json();
+  return response;
+}
+
+async function ensureOneDriveFolderPath(accessToken, folderPath) {
+  const parts = normalizeOneDrivePath(folderPath).split("/").filter(Boolean);
+  let currentPath = "";
+
+  for (const part of parts) {
+    const nextPath = `${currentPath}/${part}`;
+    const encodedPath = encodeGraphPath(nextPath);
+    const getUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}`;
+
+    try {
+      await graphFetch(accessToken, getUrl, { method: "GET" });
+      currentPath = nextPath;
+      continue;
+    } catch {
+      const parentUrl = currentPath
+        ? `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeGraphPath(currentPath)}:/children`
+        : "https://graph.microsoft.com/v1.0/me/drive/root/children";
+
+      await graphFetch(accessToken, parentUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: part,
+          folder: {},
+          "@microsoft.graph.conflictBehavior": "fail",
+        }),
+      });
+      currentPath = nextPath;
+    }
+  }
+}
+
+async function uploadBlobToOneDrive(accessToken, folderPath, filename, blob) {
+  const normalizedFolder = normalizeOneDrivePath(folderPath);
+  await ensureOneDriveFolderPath(accessToken, normalizedFolder);
+  const uploadPath = encodeGraphPath(`${normalizedFolder}/${filename}`);
+  const url = `https://graph.microsoft.com/v1.0/me/drive/root:/${uploadPath}:/content`;
+  return graphFetch(accessToken, url, {
+    method: "PUT",
+    headers: { "Content-Type": blob.type || "image/png" },
+    body: blob,
+  });
+}
+
+function loadGraphSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(GRAPH_SETTINGS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveGraphSettings(settings) {
+  localStorage.setItem(GRAPH_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function loadGraphToken() {
+  try {
+    const token = JSON.parse(sessionStorage.getItem(GRAPH_TOKEN_KEY) || "null");
+    if (!token?.accessToken) return null;
+    if (Date.now() > Number(token.expiresAt || 0)) return null;
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+function saveGraphToken(token) {
+  if (!token?.accessToken) return;
+  sessionStorage.setItem(GRAPH_TOKEN_KEY, JSON.stringify(token));
+}
+
 async function shareOrDownloadCanvas(canvas, filename, onStatus) {
   const blob = await canvasToBlob(canvas, "image/png");
   if (!blob) return;
@@ -915,9 +1060,20 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v5.5：下部ツールレールを復活。選択中ツールをもう一度押すと設定を開きます。");
+  const [status, setStatus] = useState("v6：Microsoft GraphでOneDriveへPNG自動保存できます。");
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [windowSize, setWindowSize] = useState(() => ({ width: typeof window === "undefined" ? 1024 : window.innerWidth, height: typeof window === "undefined" ? 768 : window.innerHeight }));
+  const savedGraphSettings = typeof window === "undefined" ? {} : loadGraphSettings();
+  const savedGraphToken = typeof window === "undefined" ? null : loadGraphToken();
+  const [graphClientId, setGraphClientId] = useState(savedGraphSettings.clientId || "");
+  const [graphTenant, setGraphTenant] = useState(savedGraphSettings.tenant || "common");
+  const [graphFolder, setGraphFolder] = useState(savedGraphSettings.folder || ONEDRIVE_INBOX_HINT);
+  const [autoUploadOnNewPage, setAutoUploadOnNewPage] = useState(savedGraphSettings.autoUploadOnNewPage || false);
+  const [accessToken, setAccessToken] = useState(savedGraphToken?.accessToken || "");
+  const [tokenExpiresAt, setTokenExpiresAt] = useState(savedGraphToken?.expiresAt || 0);
+  const [graphUser, setGraphUser] = useState(savedGraphToken?.user || null);
+  const [graphStatus, setGraphStatus] = useState(savedGraphToken?.accessToken ? "Microsoftログイン済みです。" : "Microsoft未ログインです。");
+  const [isGraphBusy, setIsGraphBusy] = useState(false);
   const updateRegistrationRef = useRef(null);
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
@@ -948,6 +1104,76 @@ export default function PencilRoomZFoldDrawingUXV4() {
   useEffect(() => {
     if (!currentPageId && pages.length > 0) setCurrentPageId(pages[0].id);
   }, [currentPageId, pages]);
+
+
+  useEffect(() => {
+    saveGraphSettings({
+      clientId: graphClientId.trim(),
+      tenant: graphTenant.trim() || "common",
+      folder: normalizeOneDrivePath(graphFolder),
+      autoUploadOnNewPage,
+    });
+  }, [graphClientId, graphTenant, graphFolder, autoUploadOnNewPage]);
+
+  useEffect(() => {
+    async function handleGraphRedirect() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const state = params.get("state");
+      const error = params.get("error_description") || params.get("error");
+      if (error) {
+        setGraphStatus(`Microsoftログイン失敗：${error}`);
+        window.history.replaceState({}, document.title, getRedirectUri());
+        return;
+      }
+      if (!code) return;
+
+      const pkce = JSON.parse(sessionStorage.getItem(GRAPH_PKCE_KEY) || "null");
+      if (!pkce?.verifier || pkce.state !== state) {
+        setGraphStatus("Microsoftログイン状態を確認できませんでした。もう一度ログインしてください。");
+        window.history.replaceState({}, document.title, getRedirectUri());
+        return;
+      }
+
+      setIsGraphBusy(true);
+      setGraphStatus("Microsoftログイン処理中です…");
+      try {
+        const tenant = pkce.tenant || graphTenant || "common";
+        const body = new URLSearchParams({
+          client_id: pkce.clientId,
+          scope: GRAPH_SCOPES,
+          code,
+          redirect_uri: getRedirectUri(),
+          grant_type: "authorization_code",
+          code_verifier: pkce.verifier,
+        });
+        const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        });
+        const json = await response.json();
+        if (!response.ok) throw new Error(json?.error_description || json?.error || "Token exchange failed");
+        const expiresAt = Date.now() + Math.max(60, Number(json.expires_in || 3600) - 90) * 1000;
+        const me = await graphFetch(json.access_token, "https://graph.microsoft.com/v1.0/me", { method: "GET" }).catch(() => null);
+        const tokenRecord = { accessToken: json.access_token, expiresAt, user: me };
+        setAccessToken(json.access_token);
+        setTokenExpiresAt(expiresAt);
+        setGraphUser(me);
+        saveGraphToken(tokenRecord);
+        sessionStorage.removeItem(GRAPH_PKCE_KEY);
+        setGraphStatus(`Microsoftログイン完了：${me?.displayName || me?.userPrincipalName || "signed in"}`);
+      } catch (error) {
+        setGraphStatus(`Microsoftログイン失敗：${error.message}`);
+      } finally {
+        setIsGraphBusy(false);
+        window.history.replaceState({}, document.title, getRedirectUri());
+      }
+    }
+
+    handleGraphRedirect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function getFrameRect() {
     return frameRef.current?.getBoundingClientRect() || { width: 1, height: 1 };
@@ -1449,14 +1675,17 @@ export default function PencilRoomZFoldDrawingUXV4() {
     activeDrawingPointerIdRef.current = null;
   }
 
-  function addPage() {
+  async function addPage() {
+    if (autoUploadOnNewPage && accessToken) {
+      await uploadCurrentPageToOneDrive({ quiet: true });
+    }
     const page = makeEmptyPage(pages.length + 1);
     pushHistory();
     setPages((prev) => [...prev, page]);
     setCurrentPageId(page.id);
     setSelectedImageId(null);
     setShowPages(false);
-    setStatus("新しいページを追加しました。1ページ = PowerPoint 1スライドです。");
+    setStatus(autoUploadOnNewPage && accessToken ? "現在ページをOneDriveへ送り、新しいページを追加しました。" : "新しいページを追加しました。1ページ = PowerPoint 1スライドです。");
   }
 
   function duplicatePage() {
@@ -1662,6 +1891,115 @@ export default function PencilRoomZFoldDrawingUXV4() {
     await shareOrDownloadCanvas(output, exportFilename(), setStatus);
   }
 
+
+  async function startMicrosoftLogin() {
+    const clientId = graphClientId.trim();
+    if (!clientId) {
+      setGraphStatus("Application client IDを入力してください。");
+      setShowPanel(true);
+      return;
+    }
+
+    setIsGraphBusy(true);
+    try {
+      const tenant = graphTenant.trim() || "common";
+      const { verifier, challenge } = await createPkcePair();
+      const state = randomString(48);
+      sessionStorage.setItem(GRAPH_PKCE_KEY, JSON.stringify({ verifier, state, tenant, clientId }));
+      saveGraphSettings({ clientId, tenant, folder: normalizeOneDrivePath(graphFolder), autoUploadOnNewPage });
+      const url = new URL(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/authorize`);
+      url.searchParams.set("client_id", clientId);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("redirect_uri", getRedirectUri());
+      url.searchParams.set("scope", GRAPH_SCOPES);
+      url.searchParams.set("code_challenge", challenge);
+      url.searchParams.set("code_challenge_method", "S256");
+      url.searchParams.set("state", state);
+      url.searchParams.set("prompt", "select_account");
+      window.location.assign(url.toString());
+    } finally {
+      setIsGraphBusy(false);
+    }
+  }
+
+  function signOutMicrosoft() {
+    sessionStorage.removeItem(GRAPH_TOKEN_KEY);
+    sessionStorage.removeItem(GRAPH_PKCE_KEY);
+    setAccessToken("");
+    setTokenExpiresAt(0);
+    setGraphUser(null);
+    setGraphStatus("Microsoftログアウトしました。OneDrive自動保存には再ログインしてください。");
+  }
+
+  function hasValidGraphToken() {
+    return !!accessToken && Date.now() < Number(tokenExpiresAt || 0);
+  }
+
+  async function uploadCurrentPageToOneDrive(options = {}) {
+    if (!hasValidGraphToken()) {
+      setGraphStatus("先にMicrosoftへログインしてください。期限切れの場合は再ログインしてください。");
+      setShowPanel(true);
+      return false;
+    }
+
+    const output = mergeCurrentPageToCanvas(false);
+    if (!output) return false;
+    const blob = await canvasToBlob(output, "image/png");
+    if (!blob) {
+      setGraphStatus("PNG生成に失敗しました。");
+      return false;
+    }
+
+    const filename = exportFilename();
+    setIsGraphBusy(true);
+    if (!options.quiet) setGraphStatus(`OneDriveへアップロード中：${normalizeOneDrivePath(graphFolder)}/${filename}`);
+    try {
+      const item = await uploadBlobToOneDrive(accessToken, graphFolder, filename, blob);
+      setGraphStatus(`OneDrive保存完了：${item?.name || filename}`);
+      if (!options.quiet) setStatus(`OneDrive ${normalizeOneDrivePath(graphFolder)} に保存しました。PC側でPPTXへ追加できます。`);
+      return true;
+    } catch (error) {
+      setGraphStatus(`OneDrive保存失敗：${error.message}`);
+      return false;
+    } finally {
+      setIsGraphBusy(false);
+    }
+  }
+
+  async function uploadAllPagesToOneDrive() {
+    if (!hasValidGraphToken()) {
+      setGraphStatus("先にMicrosoftへログインしてください。期限切れの場合は再ログインしてください。");
+      setShowPanel(true);
+      return;
+    }
+
+    const originalPageId = currentPageId;
+    setIsGraphBusy(true);
+    setGraphStatus(`全ページをOneDriveへアップロード中：${normalizeOneDrivePath(graphFolder)}`);
+
+    try {
+      for (let i = 0; i < pages.length; i += 1) {
+        const page = pages[i];
+        setCurrentPageId(page.id);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        renderPage(page);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        const output = mergeCurrentPageToCanvas(false);
+        if (!output) continue;
+        const blob = await canvasToBlob(output, "image/png");
+        if (!blob) continue;
+        await uploadBlobToOneDrive(accessToken, graphFolder, exportFilename(page, i + 1), blob);
+      }
+      setGraphStatus(`全ページをOneDriveへ保存しました：${normalizeOneDrivePath(graphFolder)}`);
+      setStatus("OneDriveに保存しました。PC側の監視スクリプトでPPTXへ追加できます。");
+    } catch (error) {
+      setGraphStatus(`全ページアップロード失敗：${error.message}`);
+    } finally {
+      setCurrentPageId(originalPageId);
+      setIsGraphBusy(false);
+    }
+  }
+
   async function downloadAllPages() {
     setStatus("全ページを書き出しています。ブラウザによって複数ダウンロード確認が出ます。");
     const originalPageId = currentPageId;
@@ -1760,6 +2098,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>{isNarrowViewport ? "+" : "＋Img"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>{isNarrowViewport ? "Pst" : "Paste"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>
+            <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>{isNarrowViewport ? "☁" : "OneDrive"}</ToolbarButton>
             <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
           </div>
         </header>
@@ -1915,6 +2254,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ToolbarButton compact active={false} onClick={downloadCurrentPage}>PNG保存</ToolbarButton>
               <ToolbarButton compact active={false} onClick={shareCurrentPage}>PNG共有</ToolbarButton>
+              <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>OneDrive保存</ToolbarButton>
+              <ToolbarButton compact active={hasValidGraphToken()} onClick={uploadAllPagesToOneDrive} disabled={isGraphBusy}>全ページOneDrive</ToolbarButton>
               <ToolbarButton compact active={false} onClick={downloadAllPages}>全ページ保存</ToolbarButton>
               <ToolbarButton compact active={false} onClick={clearPage}>ページ消去</ToolbarButton>
             </div>
@@ -2066,10 +2407,54 @@ export default function PencilRoomZFoldDrawingUXV4() {
               <ToolbarButton compact active={updateAvailable} onClick={applyAppUpdate}>{updateAvailable ? "Update available" : "Check update"}</ToolbarButton>
             </div>
 
-            <div style={{ display: "grid", gap: 8, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
-              <SectionTitle>OneDrive share flow</SectionTitle>
+            <div style={{ display: "grid", gap: 9, border: chromeBorder, borderRadius: 20, padding: 12, background: "#fff" }}>
+              <SectionTitle>Microsoft Graph / OneDrive auto save</SectionTitle>
               <div style={{ fontSize: 11, color: "#111", lineHeight: 1.55 }}>
-                Share PNGからAndroid共有メニューを開き、OneDriveの {ONEDRIVE_INBOX_HINT} に保存する想定です。
+                PWAからOneDriveへPNGを直接保存します。保存されたPNGはPC側のwatcherで既存PPTX末尾へ追加できます。
+              </div>
+              <label style={{ display: "grid", gap: 5, fontSize: 11, color: "#111" }}>
+                Application client ID
+                <input
+                  value={graphClientId}
+                  onChange={(event) => setGraphClientId(event.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  style={{ border: chromeBorder, borderRadius: 12, padding: "9px 10px", fontSize: 12 }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 5, fontSize: 11, color: "#111" }}>
+                Tenant
+                <input
+                  value={graphTenant}
+                  onChange={(event) => setGraphTenant(event.target.value)}
+                  placeholder="common"
+                  style={{ border: chromeBorder, borderRadius: 12, padding: "9px 10px", fontSize: 12 }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 5, fontSize: 11, color: "#111" }}>
+                OneDrive folder
+                <input
+                  value={graphFolder}
+                  onChange={(event) => setGraphFolder(event.target.value)}
+                  placeholder={ONEDRIVE_INBOX_HINT}
+                  style={{ border: chromeBorder, borderRadius: 12, padding: "9px 10px", fontSize: 12 }}
+                />
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, color: "#111" }}>
+                <input type="checkbox" checked={autoUploadOnNewPage} onChange={(event) => setAutoUploadOnNewPage(event.target.checked)} />
+                ＋Page時に現在ページを自動でOneDrive保存
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <ToolbarButton compact active={hasValidGraphToken()} onClick={startMicrosoftLogin} disabled={isGraphBusy}>{hasValidGraphToken() ? "Re-login" : "Login"}</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={signOutMicrosoft} disabled={isGraphBusy || !accessToken}>Logout</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy || !hasValidGraphToken()}>Send current</ToolbarButton>
+                <ToolbarButton compact active={false} onClick={uploadAllPagesToOneDrive} disabled={isGraphBusy || !hasValidGraphToken()}>Send all</ToolbarButton>
+              </div>
+              <div style={{ fontSize: 11, color: "#111", lineHeight: 1.55, background: "#f5f5f5", borderRadius: 12, padding: 9 }}>
+                {graphStatus}<br />
+                {graphUser?.userPrincipalName ? `Account: ${graphUser.userPrincipalName}` : ""}
+              </div>
+              <div style={{ fontSize: 10, color: "#525252", lineHeight: 1.5 }}>
+                Entra側ではSPA Redirect URIに現在のURL <code>{getRedirectUri()}</code> を登録し、User.Read / Files.ReadWrite / offline_access を許可してください。
               </div>
             </div>
           </aside>
@@ -2160,7 +2545,9 @@ export function runBasicPenEngineTests() {
   assert("paper presets include warm", !!PAPER_PRESETS.warm);
   assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
-  assert("app version is v5.5.0", APP_VERSION === "v5.5.0");
+  assert("normalizes OneDrive path", normalizeOneDrivePath("PencilRoom/inbox") === "/PencilRoom/inbox");
+  assert("encodes Graph path", encodeGraphPath("/Pencil Room/inbox/a b.png") === "Pencil%20Room/inbox/a%20b.png");
+  assert("app version is v6.0.0", APP_VERSION === "v6.0.0");
   assert("white paper preset is true white", PAPER_PRESETS.white.color === "#ffffff");
   assert("backing scale is boosted but capped", getCanvasBackingScale(3) <= MAX_CANVAS_BACKING_SCALE && getCanvasBackingScale(1) > 1);
   const resizedPage = scalePageForResize({ ...page, strokes: [{ id: "s", points: [{ x: 10, y: 20 }], settings: {} }], images: [{ id: "i", x: 10, y: 10, width: 100, height: 50 }] }, { width: 100, height: 100 }, { width: 200, height: 300 });
@@ -2195,6 +2582,9 @@ export const __testables = {
   drawIncrementalStrokeSegment,
   makeEmptyPage,
   clonePage,
+  normalizeOneDrivePath,
+  encodeGraphPath,
+  GRAPH_SCOPES,
   PAPER_PRESETS,
   SLIDE_PRESETS,
   DEFAULT_TOOL_CONFIGS,

@@ -1,6 +1,6 @@
 {
-  "version": "v5.5.0",
+  "version": "v6.0.0",
   "name": "Pencil Room",
-  "updatedAt": "2026-05-05",
-  "notes": "Restored bottom tool rail. Tapping active tool opens settings. Texture dots now follow opacity/density to reduce black artifacts."
+  "updatedAt": "2026-05-06",
+  "notes": "Microsoft Graph OneDrive auto-save and PC PowerPoint watcher workflow."
 }

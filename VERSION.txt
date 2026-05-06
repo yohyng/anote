@@ -1,10 +1,9 @@
-Pencil Room v5.5.0
+Pencil Room v6.0.0
 
 Updates:
-- Restored bottom tool rail.
-- Tapping the currently active tool opens its settings panel.
-- Canvas reserves space for the bottom tool rail on Z Fold split-screen.
-- Texture/grain dots no longer force a minimum black alpha.
-- Ink pooling underpass and graphite particles now follow opacity/density more strictly.
-- Default graphite grain/pooling slightly reduced to avoid black-dot artifacts.
+- Microsoft Graph login with PKCE.
+- Save current page PNG directly to OneDrive.
+- Save all pages to OneDrive.
+- Optional auto-save current page when adding a new page.
+- Existing PC watcher script appends synced PNGs to PowerPoint.
 - PWA cache/version updated.

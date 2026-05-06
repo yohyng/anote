@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import PencilRoomZFoldPinchPWA from "./App.jsx";
 import "./styles.css";
 
-const APP_VERSION = "v5.5.0";
+const APP_VERSION = "v6.0.0";
 window.__PENCIL_ROOM_VERSION__ = APP_VERSION;
 
 createRoot(document.getElementById("root")).render(

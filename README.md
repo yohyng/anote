@@ -101,3 +101,25 @@ If Android still shows an older version:
   - graphite particles now follow opacity/density
   - ink pooling underpass is softer and opacity-safe
 - Canvas reserves extra bottom space for the restored tool rail.
+
+
+## v6.0.0 Graph OneDrive setup
+
+1. In Microsoft Entra App registrations, create/use a SPA app.
+2. Add the deployed Vercel URL as a SPA Redirect URI. Example: `https://your-app.vercel.app/`
+3. API permissions: `User.Read`, `Files.ReadWrite`, `offline_access`.
+4. In Pencil Room Settings, enter:
+   - Application client ID
+   - Tenant: `common`
+   - OneDrive folder: `/PencilRoom/inbox`
+5. Login, then press `OneDrive` or `Send current`.
+6. On Windows, run the watcher:
+
+```powershell
+pip install python-pptx watchdog
+python pc-tools/watch_onedrive_to_ppt.py `
+  --inbox "$env:USERPROFILE\OneDrive\PencilRoom\inbox" `
+  --pptx "$env:USERPROFILE\OneDrive\PencilRoom\deck.pptx" `
+  --processed "$env:USERPROFILE\OneDrive\PencilRoom\processed" `
+  --process-existing
+```

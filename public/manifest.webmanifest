@@ -1,7 +1,7 @@
 {
-  "name": "Pencil Room v6",
+  "name": "Pencil Room v6.1",
   "short_name": "Pencil Room",
-  "description": "Z Fold note PWA with Microsoft Graph OneDrive auto-save and PowerPoint watcher.",
+  "description": "Z Fold note PWA with Graph OneDrive auto-save, resize-safe board rendering, image delete overlay, pen/finger input separation, and PowerPoint workflow.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

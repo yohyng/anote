@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * Pencil Room / Galaxy Z Fold PWA v6.0
  * Self-contained React component. No external UI/icon libraries.
  *
- * v6.0 Graph OneDrive upload + PPT watcher:
+ * v6.1 resize-safe board + image delete overlay:
  * - Versioned Service Worker cache
  * - In-app update notification
  * - Low-latency live ink path inspired by Concepts-style drawing feel
@@ -25,7 +25,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Share PNG → OneDrive inbox workflow
  */
 
-const APP_VERSION = "v6.0.0";
+const APP_VERSION = "v6.1.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
 const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
@@ -1041,6 +1041,10 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
   const pageMetricsRef = useRef(new Map());
+  const currentPageRef = useRef(null);
+  const selectedImageIdRef = useRef(null);
+  const paperPresetRef = useRef(PAPER_PRESETS.white);
+  const paperToothRef = useRef(0);
 
   const [pages, setPages] = useState([makeEmptyPage(1)]);
   const [currentPageId, setCurrentPageId] = useState(null);
@@ -1060,7 +1064,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
   const [historyTick, setHistoryTick] = useState(0);
-  const [status, setStatus] = useState("v6：Microsoft GraphでOneDriveへPNG自動保存できます。");
+  const [status, setStatus] = useState("v6.1：リサイズ時にボード内容を保持し、画像選択時に削除ボタンを表示します。");
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [windowSize, setWindowSize] = useState(() => ({ width: typeof window === "undefined" ? 1024 : window.innerWidth, height: typeof window === "undefined" ? 768 : window.innerHeight }));
   const savedGraphSettings = typeof window === "undefined" ? {} : loadGraphSettings();
@@ -1077,6 +1081,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const updateRegistrationRef = useRef(null);
 
   const currentPage = pages.find((p) => p.id === currentPageId) || pages[0];
+  const selectedImage = currentPage?.images?.find((image) => image.id === selectedImageId) || null;
   const slidePreset = SLIDE_PRESETS[slidePresetId];
   const paperPreset = PAPER_PRESETS[paperPresetId] || PAPER_PRESETS.warm;
   const activeTool = toolConfigs[activeToolId] || toolConfigs.silkyPen;
@@ -1084,6 +1089,13 @@ export default function PencilRoomZFoldDrawingUXV4() {
   const darkPaper = paperPresetId === "charcoal";
   const canUndo = undoStackRef.current.length > 0;
   const canRedo = redoStackRef.current.length > 0;
+
+  // Keep resize/visualViewport event handlers in sync with the latest board state.
+  // Android split-screen can fire resize events from an old React closure; refs prevent rendering an old empty page.
+  currentPageRef.current = currentPage;
+  selectedImageIdRef.current = selectedImageId;
+  paperPresetRef.current = paperPreset;
+  paperToothRef.current = paperTooth;
 
   const pressureCalibration = useMemo(
     () => ({ pressureFloor, pressureGain, pressureGamma }),
@@ -1263,6 +1275,11 @@ export default function PencilRoomZFoldDrawingUXV4() {
     const rect = frame.getBoundingClientRect();
     const logicalWidth = frame.offsetWidth || rect.width;
     const logicalHeight = frame.offsetHeight || rect.height;
+
+    // Android split-screen / fold transitions sometimes report a transient 0px frame.
+    // Resizing canvases to that value clears visible board data, so skip until layout settles.
+    if (logicalWidth < 24 || logicalHeight < 24) return;
+
     const backingScale = getCanvasBackingScale(window.devicePixelRatio || 1);
 
     for (const canvas of [bgCanvas, imageCanvas, drawCanvas]) {
@@ -1276,18 +1293,20 @@ export default function PencilRoomZFoldDrawingUXV4() {
       ctx.imageSmoothingQuality = "high";
     }
 
+    const pageForRender = currentPageRef.current || currentPage;
     const nextMetrics = { width: logicalWidth, height: logicalHeight };
-    const previousMetrics = currentPage?.id ? pageMetricsRef.current.get(currentPage.id) : null;
-    let pageToRender = currentPage;
+    const previousMetrics = pageForRender?.id ? pageMetricsRef.current.get(pageForRender.id) : null;
+    let pageToRender = pageForRender;
 
-    if (preserveDrawing && currentPage?.id && shouldScalePageForResize(previousMetrics, nextMetrics)) {
-      pageToRender = scalePageForResize(currentPage, previousMetrics, nextMetrics);
-      setPages((prev) => prev.map((page) => (page.id === currentPage.id ? pageToRender : page)));
+    if (preserveDrawing && pageForRender?.id && shouldScalePageForResize(previousMetrics, nextMetrics)) {
+      pageToRender = scalePageForResize(pageForRender, previousMetrics, nextMetrics);
+      currentPageRef.current = pageToRender;
+      setPages((prev) => prev.map((page) => (page.id === pageForRender.id ? pageToRender : page)));
     }
 
-    if (currentPage?.id) pageMetricsRef.current.set(currentPage.id, nextMetrics);
+    if (pageForRender?.id) pageMetricsRef.current.set(pageForRender.id, nextMetrics);
     grainDotsRef.current = makePaperGrain(logicalWidth, logicalHeight);
-    renderPage(pageToRender);
+    renderPage(pageToRender, selectedImageIdRef.current);
   }
 
   function redrawPaper() {
@@ -1296,10 +1315,10 @@ export default function PencilRoomZFoldDrawingUXV4() {
     if (!bgCanvas || !frame) return;
     const width = frame.offsetWidth || frame.getBoundingClientRect().width;
     const height = frame.offsetHeight || frame.getBoundingClientRect().height;
-    drawPaperTexture(bgCanvas.getContext("2d"), width, height, paperTooth, grainDotsRef.current, paperPreset);
+    drawPaperTexture(bgCanvas.getContext("2d"), width, height, paperToothRef.current, grainDotsRef.current, paperPresetRef.current);
   }
 
-  function redrawImages(page = currentPage, selectedId = selectedImageId) {
+  function redrawImages(page = currentPageRef.current || currentPage, selectedId = selectedImageIdRef.current) {
     const canvas = imageCanvasRef.current;
     const frame = frameRef.current;
     if (!canvas || !frame || !page) return;
@@ -1310,7 +1329,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
     drawImagesToCanvas(ctx, page.images, selectedId, true);
   }
 
-  function redrawStrokes(page = currentPage, liveStroke = null) {
+  function redrawStrokes(page = currentPageRef.current || currentPage, liveStroke = null) {
     const canvas = drawCanvasRef.current;
     const frame = frameRef.current;
     if (!canvas || !frame || !page) return;
@@ -1322,9 +1341,9 @@ export default function PencilRoomZFoldDrawingUXV4() {
     if (liveStroke) drawStroke(ctx, liveStroke);
   }
 
-  function renderPage(page = currentPage) {
+  function renderPage(page = currentPageRef.current || currentPage, selectedId = selectedImageIdRef.current) {
     redrawPaper();
-    redrawImages(page, selectedImageId);
+    redrawImages(page, selectedId);
     redrawStrokes(page);
   }
 
@@ -2155,6 +2174,48 @@ export default function PencilRoomZFoldDrawingUXV4() {
                 Drop image here
               </div>
             )}
+
+            {selectedImage && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "5px 6px",
+                  borderRadius: 999,
+                  border: chromeBorder,
+                  background: "rgba(255,255,255,.92)",
+                  boxShadow: "0 8px 22px rgba(0,0,0,.10)",
+                  zIndex: 24,
+                  pointerEvents: "auto",
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerMove={(event) => event.stopPropagation()}
+                onPointerUp={(event) => event.stopPropagation()}
+              >
+                <span style={{ fontSize: 10, color: "#525252", lineHeight: 1, whiteSpace: "nowrap" }}>Image</span>
+                <button
+                  type="button"
+                  onClick={deleteSelectedImage}
+                  style={{
+                    border: "1px solid #000",
+                    background: "#fff",
+                    color: "#000",
+                    borderRadius: 999,
+                    padding: "6px 8px",
+                    fontSize: 10.5,
+                    lineHeight: 1,
+                    fontWeight: 650,
+                    cursor: "pointer",
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            )}
           </div>
 
           <div
@@ -2547,7 +2608,7 @@ export function runBasicPenEngineTests() {
   assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
   assert("normalizes OneDrive path", normalizeOneDrivePath("PencilRoom/inbox") === "/PencilRoom/inbox");
   assert("encodes Graph path", encodeGraphPath("/Pencil Room/inbox/a b.png") === "Pencil%20Room/inbox/a%20b.png");
-  assert("app version is v6.0.0", APP_VERSION === "v6.0.0");
+  assert("app version is v6.1.0", APP_VERSION === "v6.1.0");
   assert("white paper preset is true white", PAPER_PRESETS.white.color === "#ffffff");
   assert("backing scale is boosted but capped", getCanvasBackingScale(3) <= MAX_CANVAS_BACKING_SCALE && getCanvasBackingScale(1) > 1);
   const resizedPage = scalePageForResize({ ...page, strokes: [{ id: "s", points: [{ x: 10, y: 20 }], settings: {} }], images: [{ id: "i", x: 10, y: 10, width: 100, height: 50 }] }, { width: 100, height: 100 }, { width: 200, height: 300 });
@@ -2555,6 +2616,7 @@ export function runBasicPenEngineTests() {
   assert("resize scales stroke y", resizedPage.strokes[0].points[0].y === 60);
   assert("resize scales image width", resizedPage.images[0].width === 200);
   assert("should scale resize detects changed size", shouldScalePageForResize({ width: 100, height: 100 }, { width: 120, height: 100 }) === true);
+  assert("selected image lookup works", [{ id: "img1" }].find((image) => image.id === "img1")?.id === "img1");
 
   return results;
 }

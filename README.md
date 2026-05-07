@@ -103,7 +103,7 @@ If Android still shows an older version:
 - Canvas reserves extra bottom space for the restored tool rail.
 
 
-## v6.0.0 Graph OneDrive setup
+## v6.1.0 Graph OneDrive setup
 
 1. In Microsoft Entra App registrations, create/use a SPA app.
 2. Add the deployed Vercel URL as a SPA Redirect URI. Example: `https://your-app.vercel.app/`
@@ -123,3 +123,12 @@ python pc-tools/watch_onedrive_to_ppt.py `
   --processed "$env:USERPROFILE\OneDrive\PencilRoom\processed" `
   --process-existing
 ```
+
+
+## v6.1.0 updates
+
+- Fixes Android split-screen resize causing board contents to disappear.
+- Uses live refs for current page / selected image / paper settings during resize handlers.
+- Skips transient too-small resize frames during Z Fold layout changes.
+- Adds a floating Delete button when an image is selected.
+- Keeps Pen + Finger / Pen only / Finger only input modes.

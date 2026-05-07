@@ -1,9 +1,9 @@
-Pencil Room v6.0.0
+Pencil Room v6.1.0
 
 Updates:
-- Microsoft Graph login with PKCE.
-- Save current page PNG directly to OneDrive.
-- Save all pages to OneDrive.
-- Optional auto-save current page when adding a new page.
-- Existing PC watcher script appends synced PNGs to PowerPoint.
+- Android split-screen / app resize no longer renders an old empty board from a stale resize handler.
+- Skips transient 0px/too-small frame resize events that can clear canvases.
+- Scales strokes and inserted images to the new board size using current state refs.
+- Adds a floating Delete button when an image is selected.
+- Pen/Finger input separation remains available in Settings > Input.
 - PWA cache/version updated.

@@ -1,13 +1,13 @@
 {
-  "name": "pencil-room-v6-2",
-  "version": "0.6.2",
+  "name": "pencil-room-v6-3",
+  "version": "0.6.3",
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/apply-v6-2-patch.mjs",
-    "predev": "node scripts/apply-v6-2-patch.mjs",
+    "postinstall": "node scripts/apply-v6-2-patch.mjs && node scripts/apply-v6-3-patch.mjs",
+    "predev": "node scripts/apply-v6-2-patch.mjs && node scripts/apply-v6-3-patch.mjs",
     "dev": "vite --host 0.0.0.0",
-    "prebuild": "node scripts/apply-v6-2-patch.mjs",
+    "prebuild": "node scripts/apply-v6-2-patch.mjs && node scripts/apply-v6-3-patch.mjs",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },

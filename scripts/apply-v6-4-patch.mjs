@@ -38,8 +38,9 @@ function patchApp() {
   text = replaceAll(text, 'const APP_VERSION = "v6.3.0";', 'const APP_VERSION = "v6.4.0";');
   text = replaceAll(text, 'v6.3：Pen only中は一本指でキャンバス移動、たまり表現の幅を広げました。', 'v6.4：始点・終点が少し太くなるペン挙動と、濃いめ鉛筆の初期値を追加しました。');
 
-  // Reinterpret “tamari” as endpoint swelling rather than ink pooling.
-  text = replaceAll(text, 'inkPooling: 0.34,', 'inkPooling: 0.18,\n    endSwelling: 0.34,');
+  // Reinterpret “たまり” as endpoint swelling rather than ink pooling.
+  // Keep replacements non-cascading: the newly inserted silkyPen value must not be matched again.
+  text = replaceAll(text, 'inkPooling: 0.34,', 'inkPooling: 0.1,\n    endSwelling: 0.34,');
   text = replaceAll(text, 'inkPooling: 0.18,', 'inkPooling: 0.08,\n    endSwelling: 0.22,');
   text = replaceAll(text, 'inkPooling: 0.16,', 'inkPooling: 0.08,\n    endSwelling: 0.18,');
   text = replaceAll(text, 'inkPooling: 0.28,', 'inkPooling: 0.12,\n    endSwelling: 0.1,');

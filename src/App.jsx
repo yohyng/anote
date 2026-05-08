@@ -1542,6 +1542,19 @@ export default function PencilRoomZFoldDrawingUXV4() {
     }
 
     if (!isPointerAllowedForDrawing(event.pointerType || "mouse", inputMode)) {
+      const hit = getImageHit(currentPage.images, raw.x, raw.y);
+      if (hit) {
+        pushHistory();
+        setSelectedImageId(hit.image.id);
+        imageInteractionRef.current = {
+          imageId: hit.image.id,
+          mode: hit.mode,
+          startX: raw.x,
+          startY: raw.y,
+          original: { ...hit.image },
+        };
+        return;
+      }
       activeDrawingPointerIdRef.current = null;
       setStatus(`${INPUT_MODE_PRESETS[inputMode].label}：この入力では描画しません。二本指ピンチは使えます。`);
       return;
@@ -1592,7 +1605,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
     if (activeDrawingPointerIdRef.current !== event.pointerId) return;
     const raw = getPointFromEvent(event, canvas, pressureCalibration);
 
-    if (activeTool.kind === "image" && imageInteractionRef.current) {
+    if (imageInteractionRef.current) {
       const { imageId, mode: hitMode, startX, startY, original } = imageInteractionRef.current;
       const dx = raw.x - startX;
       const dy = raw.y - startY;

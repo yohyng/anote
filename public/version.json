@@ -1,6 +1,6 @@
 {
   "version": "v6.1.0",
-  "name": "Pencil Room",
+  "name": "Scrapdeck",
   "updatedAt": "2026-05-07",
   "notes": "Resize-safe board rendering on Android split-screen, floating delete button for selected images, and existing pen/finger input separation."
 }

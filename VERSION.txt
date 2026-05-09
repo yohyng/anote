@@ -1,4 +1,4 @@
-Pencil Room v6.1.0
+Scrapdeck v6.1.0
 
 Updates:
 - Android split-screen / app resize no longer renders an old empty board from a stale resize handler.

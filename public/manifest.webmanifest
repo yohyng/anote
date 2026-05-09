@@ -1,6 +1,6 @@
 {
-  "name": "Pencil Room v6.1",
-  "short_name": "Pencil Room",
+  "name": "Scrapdeck v6.1",
+  "short_name": "Scrapdeck",
   "description": "Z Fold note PWA with Graph OneDrive auto-save, resize-safe board rendering, image delete overlay, pen/finger input separation, and PowerPoint workflow.",
   "start_url": "/",
   "scope": "/",

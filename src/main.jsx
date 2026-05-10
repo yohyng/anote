@@ -1,19 +1,19 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import PencilRoomZFoldPinchPWA from "./App.jsx";
+import ScrapdeckApp from "./App.jsx";
 import "./styles.css";
 
 const APP_VERSION = "v6.1.0";
-window.__PENCIL_ROOM_VERSION__ = APP_VERSION;
+window.__SCRAPDECK_VERSION__ = APP_VERSION;
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <PencilRoomZFoldPinchPWA />
+    <ScrapdeckApp />
   </React.StrictMode>
 );
 
 function notifyUpdateAvailable(registration) {
-  window.dispatchEvent(new CustomEvent("pencilroom:update-available", { detail: { registration, version: APP_VERSION } }));
+  window.dispatchEvent(new CustomEvent("scrapdeck:update-available", { detail: { registration, version: APP_VERSION } }));
 }
 
 if ("serviceWorker" in navigator) {
@@ -39,8 +39,8 @@ if ("serviceWorker" in navigator) {
       });
 
       navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (window.__PENCIL_ROOM_RELOADING_FOR_UPDATE__) return;
-        window.__PENCIL_ROOM_RELOADING_FOR_UPDATE__ = true;
+        if (window.__SCRAPDECK_RELOADING_FOR_UPDATE__) return;
+        window.__SCRAPDECK_RELOADING_FOR_UPDATE__ = true;
         window.location.reload();
       });
     } catch (error) {

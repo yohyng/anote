@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /**
- * Pencil Room / Galaxy Z Fold PWA v6.0
+ * Scrapdeck / Galaxy Z Fold PWA v6.0
  * Self-contained React component. No external UI/icon libraries.
  *
  * v6.1 resize-safe board + image delete overlay:
@@ -28,11 +28,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 const APP_VERSION = "v6.1.0";
 const INK_COLOR = { r: 24, g: 23, b: 21 };
 const DEFAULT_PAGE_NAME = "Page";
-const ONEDRIVE_INBOX_HINT = "/PencilRoom/inbox";
+const ONEDRIVE_INBOX_HINT = "/Scrapdeck/inbox";
 const GRAPH_SCOPES = "openid profile User.Read Files.ReadWrite offline_access";
-const GRAPH_SETTINGS_KEY = "pencilroom_graph_settings_v1";
-const GRAPH_TOKEN_KEY = "pencilroom_graph_token_v1";
-const GRAPH_PKCE_KEY = "pencilroom_graph_pkce_v1";
+const GRAPH_SETTINGS_KEY = "scrapdeck_graph_settings_v1";
+const GRAPH_TOKEN_KEY = "scrapdeck_graph_token_v1";
+const GRAPH_PKCE_KEY = "scrapdeck_graph_pkce_v1";
 const MAX_CANVAS_BACKING_SCALE = 4;
 const CANVAS_RESOLUTION_BOOST = 1.55;
 
@@ -907,7 +907,7 @@ async function shareOrDownloadCanvas(canvas, filename, onStatus) {
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: filename, text: "Pencil Room slide image" });
+      await navigator.share({ files: [file], title: filename, text: "Scrapdeck slide image" });
       onStatus?.(`共有しました。OneDriveの ${ONEDRIVE_INBOX_HINT} へ保存してください。`);
       return;
     } catch (error) {
@@ -1020,7 +1020,7 @@ function SectionTitle({ children }) {
   return <div style={{ fontSize: 11, color: "#525252", textTransform: "uppercase", letterSpacing: 0.8 }}>{children}</div>;
 }
 
-export default function PencilRoomZFoldDrawingUXV4() {
+export default function ScrapdeckApp() {
   const frameRef = useRef(null);
   const bgCanvasRef = useRef(null);
   const imageCanvasRef = useRef(null);
@@ -1907,14 +1907,14 @@ export default function PencilRoomZFoldDrawingUXV4() {
   function exportFilename(page = currentPage, index = pages.findIndex((p) => p.id === currentPage.id) + 1) {
     const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
     const safeName = page.name.replace(/[\\/:*?"<>|\s]+/g, "-").toLowerCase();
-    return `pencil-room_${stamp}_${String(index).padStart(3, "0")}_${safeName}_${slidePreset.exportWidth}x${slidePreset.exportHeight}.png`;
+    return `scrapdeck_${stamp}_${String(index).padStart(3, "0")}_${safeName}_${slidePreset.exportWidth}x${slidePreset.exportHeight}.png`;
   }
 
   function downloadCurrentPage() {
     const output = mergeCurrentPageToCanvas(false);
     if (!output) return;
     downloadCanvas(output, exportFilename());
-    setStatus("現在のページをPNG保存しました。OneDrive/PencilRoom/inboxへ入れる想定です。");
+    setStatus("現在のページをPNG保存しました。OneDrive/Scrapdeck/inboxへ入れる想定です。");
   }
 
   async function shareCurrentPage() {
@@ -2066,8 +2066,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
       setStatus("新しいバージョンを読み込めます。Updateボタンで反映できます。");
     }
 
-    window.addEventListener("pencilroom:update-available", handleUpdateAvailable);
-    return () => window.removeEventListener("pencilroom:update-available", handleUpdateAvailable);
+    window.addEventListener("scrapdeck:update-available", handleUpdateAvailable);
+    return () => window.removeEventListener("scrapdeck:update-available", handleUpdateAvailable);
   }, []);
 
   async function applyAppUpdate() {
@@ -2113,13 +2113,17 @@ export default function PencilRoomZFoldDrawingUXV4() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>{isNarrowViewport ? "Pg" : "Pages"}</ToolbarButton>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {isVeryNarrowViewport ? "Pencil" : "Pencil Room"} <span style={{ fontSize: 10, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span>
+            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>
+              {isVeryNarrowViewport ? `P${String(pageIndex + 1).padStart(2, "0")}` : isNarrowViewport ? "Pg" : "Pages"}
+            </ToolbarButton>
+            {!isVeryNarrowViewport && (
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  Scrapdeck <span style={{ fontSize: 10, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#525252" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
               </div>
-              {!isVeryNarrowViewport && <div style={{ fontSize: 10, color: "#525252" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>}
-            </div>
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: isNarrowViewport ? 5 : 8, overflowX: "auto", paddingBottom: 1, minWidth: 0, flex: "1 1 auto", justifyContent: "flex-end", scrollbarWidth: "none" }}>
@@ -2129,8 +2133,8 @@ export default function PencilRoomZFoldDrawingUXV4() {
             <ToolbarButton compact active={false} onClick={() => setShowPanel(true)}>{isNarrowViewport ? activeTool.icon : activeTool.label}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>{isNarrowViewport ? "+" : "＋Img"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>{isNarrowViewport ? "Pst" : "Paste"}</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>
-            <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>{isNarrowViewport ? "☁" : "OneDrive"}</ToolbarButton>
+            {!isVeryNarrowViewport && <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>}
+            {!isVeryNarrowViewport && <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>{isNarrowViewport ? "☁" : "OneDrive"}</ToolbarButton>}
             <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
           </div>
         </header>
@@ -2141,14 +2145,52 @@ export default function PencilRoomZFoldDrawingUXV4() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onPointerDown={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.set(e.pointerId, e);
+            if (shouldBeginPinch(activePointersRef.current.size)) {
+              const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+              pinchGestureRef.current = {
+                startDistance: getClientDistance(pointers[0], pointers[1]),
+                startMid: getClientMidpoint(pointers[0], pointers[1]),
+                startViewport: { ...viewport },
+              };
+              resetStrokeState();
+              imageInteractionRef.current = null;
+            }
+          }}
+          onPointerMove={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            if (activePointersRef.current.has(e.pointerId)) activePointersRef.current.set(e.pointerId, e);
+            if (pinchGestureRef.current && activePointersRef.current.size >= 2) {
+              const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+              setViewport(getNextViewportForPinch(
+                pinchGestureRef.current.startViewport,
+                pinchGestureRef.current.startMid,
+                getClientMidpoint(pointers[0], pointers[1]),
+                pinchGestureRef.current.startDistance,
+                getClientDistance(pointers[0], pointers[1])
+              ));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.delete(e.pointerId);
+            if (activePointersRef.current.size < 2) pinchGestureRef.current = null;
+          }}
+          onPointerCancel={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.delete(e.pointerId);
+            pinchGestureRef.current = null;
+          }}
         >
           <div
             ref={frameRef}
             style={{
               position: "relative",
-              width: `min(calc(100vw - ${shellPadding * 2}px), calc((100dvh - ${canvasReserveHeight}px) * var(--ratio)))`,
+              width: `min(calc(100vw - ${shellPadding * 2}px), calc((100dvh - ${canvasReserveHeight}px - env(safe-area-inset-bottom, 0px)) * var(--ratio)))`,
               maxWidth: `calc(100vw - ${shellPadding * 2}px)`,
-              maxHeight: `calc(100dvh - ${canvasReserveHeight}px)`,
+              maxHeight: `calc(100dvh - ${canvasReserveHeight}px - env(safe-area-inset-bottom, 0px))`,
               aspectRatio: `${slidePreset.ratio}`,
               overflow: "hidden",
               background: paperPreset.color,
@@ -2235,7 +2277,7 @@ export default function PencilRoomZFoldDrawingUXV4() {
             style={{
               position: "absolute",
               left: "50%",
-              bottom: shellPadding + 4,
+              bottom: `calc(${shellPadding + 4}px + env(safe-area-inset-bottom, 0px))`,
               transform: "translateX(-50%)",
               display: "flex",
               alignItems: "center",
@@ -2618,9 +2660,9 @@ export function runBasicPenEngineTests() {
   assert("image hit resize", getImageHit([{ id: "a", x: 10, y: 10, width: 100, height: 80 }], 110, 90)?.mode === "resize");
   assert("paper presets include warm", !!PAPER_PRESETS.warm);
   assert("widescreen export is 1920x1080", SLIDE_PRESETS.widescreen.exportWidth === 1920 && SLIDE_PRESETS.widescreen.exportHeight === 1080);
-  assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/PencilRoom/inbox");
-  assert("normalizes OneDrive path", normalizeOneDrivePath("PencilRoom/inbox") === "/PencilRoom/inbox");
-  assert("encodes Graph path", encodeGraphPath("/Pencil Room/inbox/a b.png") === "Pencil%20Room/inbox/a%20b.png");
+  assert("onedrive inbox hint exists", ONEDRIVE_INBOX_HINT === "/Scrapdeck/inbox");
+  assert("normalizes OneDrive path", normalizeOneDrivePath("Scrapdeck/inbox") === "/Scrapdeck/inbox");
+  assert("encodes Graph path", encodeGraphPath("/Scrapdeck/inbox/a b.png") === "Scrapdeck/inbox/a%20b.png");
   assert("app version is v6.1.0", APP_VERSION === "v6.1.0");
   assert("white paper preset is true white", PAPER_PRESETS.white.color === "#ffffff");
   assert("backing scale is boosted but capped", getCanvasBackingScale(3) <= MAX_CANVAS_BACKING_SCALE && getCanvasBackingScale(1) > 1);

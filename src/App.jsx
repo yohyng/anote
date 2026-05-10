@@ -2113,13 +2113,17 @@ export default function ScrapdeckApp() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>{isNarrowViewport ? "Pg" : "Pages"}</ToolbarButton>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {isVeryNarrowViewport ? "Scrap" : "Scrapdeck"} <span style={{ fontSize: 10, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span>
+            <ToolbarButton compact active={showPages} onClick={() => setShowPages((v) => !v)}>
+              {isVeryNarrowViewport ? `P${String(pageIndex + 1).padStart(2, "0")}` : isNarrowViewport ? "Pg" : "Pages"}
+            </ToolbarButton>
+            {!isVeryNarrowViewport && (
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 650, letterSpacing: -0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  Scrapdeck <span style={{ fontSize: 10, color: "#525252", fontWeight: 500 }}>{APP_VERSION}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "#525252" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>
               </div>
-              {!isVeryNarrowViewport && <div style={{ fontSize: 10, color: "#525252" }}>{String(pageIndex + 1).padStart(2, "0")} / {pages.length} · {SLIDE_PRESETS[slidePresetId].label}</div>}
-            </div>
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: isNarrowViewport ? 5 : 8, overflowX: "auto", paddingBottom: 1, minWidth: 0, flex: "1 1 auto", justifyContent: "flex-end", scrollbarWidth: "none" }}>
@@ -2129,8 +2133,8 @@ export default function ScrapdeckApp() {
             <ToolbarButton compact active={false} onClick={() => setShowPanel(true)}>{isNarrowViewport ? activeTool.icon : activeTool.label}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={() => fileInputRef.current?.click()}>{isNarrowViewport ? "+" : "＋Img"}</ToolbarButton>
             <ToolbarButton compact active={false} onClick={pasteImageFromClipboard}>{isNarrowViewport ? "Pst" : "Paste"}</ToolbarButton>
-            <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>
-            <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>{isNarrowViewport ? "☁" : "OneDrive"}</ToolbarButton>
+            {!isVeryNarrowViewport && <ToolbarButton compact active={false} onClick={shareCurrentPage}>{isNarrowViewport ? "↗" : "Share"}</ToolbarButton>}
+            {!isVeryNarrowViewport && <ToolbarButton compact active={hasValidGraphToken()} onClick={() => uploadCurrentPageToOneDrive()} disabled={isGraphBusy}>{isNarrowViewport ? "☁" : "OneDrive"}</ToolbarButton>}
             <ToolbarButton compact active={showPanel} onClick={() => setShowPanel((v) => !v)}>⚙</ToolbarButton>
           </div>
         </header>
@@ -2141,14 +2145,52 @@ export default function ScrapdeckApp() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onPointerDown={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.set(e.pointerId, e);
+            if (shouldBeginPinch(activePointersRef.current.size)) {
+              const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+              pinchGestureRef.current = {
+                startDistance: getClientDistance(pointers[0], pointers[1]),
+                startMid: getClientMidpoint(pointers[0], pointers[1]),
+                startViewport: { ...viewport },
+              };
+              resetStrokeState();
+              imageInteractionRef.current = null;
+            }
+          }}
+          onPointerMove={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            if (activePointersRef.current.has(e.pointerId)) activePointersRef.current.set(e.pointerId, e);
+            if (pinchGestureRef.current && activePointersRef.current.size >= 2) {
+              const pointers = Array.from(activePointersRef.current.values()).slice(-2);
+              setViewport(getNextViewportForPinch(
+                pinchGestureRef.current.startViewport,
+                pinchGestureRef.current.startMid,
+                getClientMidpoint(pointers[0], pointers[1]),
+                pinchGestureRef.current.startDistance,
+                getClientDistance(pointers[0], pointers[1])
+              ));
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.delete(e.pointerId);
+            if (activePointersRef.current.size < 2) pinchGestureRef.current = null;
+          }}
+          onPointerCancel={(e) => {
+            if (e.target === drawCanvasRef.current) return;
+            activePointersRef.current.delete(e.pointerId);
+            pinchGestureRef.current = null;
+          }}
         >
           <div
             ref={frameRef}
             style={{
               position: "relative",
-              width: `min(calc(100vw - ${shellPadding * 2}px), calc((100dvh - ${canvasReserveHeight}px) * var(--ratio)))`,
+              width: `min(calc(100vw - ${shellPadding * 2}px), calc((100dvh - ${canvasReserveHeight}px - env(safe-area-inset-bottom, 0px)) * var(--ratio)))`,
               maxWidth: `calc(100vw - ${shellPadding * 2}px)`,
-              maxHeight: `calc(100dvh - ${canvasReserveHeight}px)`,
+              maxHeight: `calc(100dvh - ${canvasReserveHeight}px - env(safe-area-inset-bottom, 0px))`,
               aspectRatio: `${slidePreset.ratio}`,
               overflow: "hidden",
               background: paperPreset.color,
@@ -2235,7 +2277,7 @@ export default function ScrapdeckApp() {
             style={{
               position: "absolute",
               left: "50%",
-              bottom: shellPadding + 4,
+              bottom: `calc(${shellPadding + 4}px + env(safe-area-inset-bottom, 0px))`,
               transform: "translateX(-50%)",
               display: "flex",
               alignItems: "center",
